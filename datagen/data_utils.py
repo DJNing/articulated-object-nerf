@@ -102,6 +102,14 @@ def get_joint_type(asset):
             j_type += [joint.type[0]] * joint.get_dof()
     return j_type
 
+def get_joint_limit(asset):
+    joints = asset.get_joints()
+    j_limits = []
+    for joint in joints:
+        if joint.get_dof() != 0:
+            j_limits += [joint.get_limits()] 
+    return np.array(j_limits) # should be Nx2
+
 def calculate_cam_ext(point):
     cam_pos = np.array(point)
     # def update_cam_pose(cam_pos):
@@ -187,7 +195,10 @@ def render_img(point, save_path, camera_mount_actor, scene, camera, asset, q_pos
     return ret_dict
 
 def gen_articulated_object_nerf_s1(num_pos_img, radius_, split, camera, asset, scene, object_path, camera_mount_actor=None, theta_range = [0*math.pi, 2*math.pi], phi_range = [0*math.pi, 1*math.pi], render_pose_file_dir = None):
-    save_base_path = object_path / split
+    if split is not None:
+        save_base_path = object_path / split
+    else:
+        save_base_path = object_path
     save_base_path.mkdir(exist_ok=True)
     save_rgb_path = save_base_path / 'rgb'
     save_rgb_path.mkdir(exist_ok=True)
@@ -241,14 +252,17 @@ def gen_articulated_object_nerf_s1(num_pos_img, radius_, split, camera, asset, s
         json.dump(transform_json, f)
     pass
 
-def generate_img_with_pose(pose_dir, split, camera, asset, scene, object_path, camera_mount_actor=None):
-    save_base_path = object_path / split
+def generate_img_with_pose(pose_dir, split, camera, asset, scene, object_path, camera_mount_actor=None, qpos=0):
+    
+    if split is not None:
+        save_base_path = object_path / split
+    else:
+        save_base_path = object_path
     save_base_path.mkdir(exist_ok=True)
     save_rgb_path = save_base_path / 'rgb'
     save_rgb_path.mkdir(exist_ok=True)
     save_depth_path = save_base_path / 'depth'
     save_depth_path.mkdir(exist_ok=True)
-    render_pose_dict = {}
     # j_types = get_joint_type(asset)
     transform_json = {
         "focal": camera.fy
@@ -258,7 +272,7 @@ def generate_img_with_pose(pose_dir, split, camera, asset, scene, object_path, c
     min_d = np.inf
     # load camera pose
     pose_fname = P(pose_dir) / (split + '.json')
-    
+    asset.set_qpos(np.array(qpos))
     print('generating images from saved pose file: ', pose_fname)
     render_pose = json.load(open(str(pose_fname)))
     for frame_id in tqdm(render_pose.keys()):
@@ -358,3 +372,150 @@ def render_img_with_pose(pose, save_path, camera_mount_actor, scene, camera, ass
         'mat44': mat44
     }
     return ret_dict
+
+
+def generate_art_imgs(output_dir, split, index_list, scene_dict, num_imgs, pose_dict=None, reuse_pose=False):
+    """
+    Generate and save files into the specified directory structure for a single split.
+
+    Args:
+        output_dir (str): The root directory where the structure will be created.
+        split (str): The name of the split (e.g., 'train', 'val', 'test').
+        index_list (list): List of folder names for each index.
+        scene_dict (dict): ditc{
+            "scene": scene,
+            "camera": camera,
+            "asset": asset,
+            "pose": pose,
+            "q_pos": qpos,
+            "save_path": save_path,
+            "save": save,
+            "pose_fn": pose_fn,
+            "camera_mount_actor": None
+        }
+        num_imgs (int): number of images to save for each articulation index (configuration)
+        pose_dict (dict): default None
+        reuse_pose (bool): if true, return pose used here.
+    Returns:
+        None or pose_dict
+    """
+    output_path = P(output_dir)
+
+    # Create the root output directory if it doesn't exist
+    output_path.mkdir(parents=True, exist_ok=True)
+
+    # Create the directory for the specified split
+    split_dir = output_path / split
+    split_dir.mkdir(exist_ok=True)
+    
+    pose_dict = {}
+    
+    for i in range(num_imgs):
+        frame_id = 'r_' + str(i)
+        point = random_point_in_sphere(radius=5)
+        mat44 = calculate_cam_ext(point)
+        pose_dict[frame_id] = mat44
+
+    # Iterate through each index folder (e.g., 'idx0_folder', 'idx1_folder', ...)
+    for index in tqdm(index_list):
+        if index == 0:
+            # skip the 0 articulation
+            continue
+        index_folder = f'idx_{index}'
+        index_folder_dir = split_dir / index_folder
+        index_folder_dir.mkdir(exist_ok=True)
+        q_limits = get_joint_limit(scene_dict['asset']).reshape([-1, 2])
+        if split == 'train':
+            q_ratio = index/max(index_list)
+        else:
+            q_ratio = (index-0.5)/max(index_list) 
+        q_ratio = index/max(index_list)
+        cur_qpos = q_limits[:, 0] + q_ratio * (q_limits[:, 1] - q_limits[:, 0])
+        
+        scene_dict['q_pos'] = cur_qpos
+        transforms_data = {
+        }
+        # Create subdirectories for 'rgb', 'depth', 'seg'
+        for subfolder in ['rgb', 'depth', 'seg']:
+            subfolder_dir = index_folder_dir / subfolder
+            subfolder_dir.mkdir(exist_ok=True)
+
+        for img_idx in range(num_imgs):
+            frame_id = 'r_' + str(img_idx)
+            fname = frame_id + '.png'
+            if pose_dict is None:
+                if not reuse_pose:
+                    point = random_point_in_sphere(radius=5)
+                    mat44 = calculate_cam_ext(point)
+                    scene_dict['pose'] = mat44
+                else:
+                    scene_dict['pose'] = pose_dict[frame_id]
+            else:
+                scene_dict['pose'] = np.array(pose_dict[frame_id])
+            ret_dict = render_img_with_pose(**scene_dict)
+            ret_dict['rgba'].save(str(index_folder_dir / 'rgb' / fname))
+            ret_dict['depth'].save(str(index_folder_dir / 'depth' / fname))
+            ret_dict['label_1'].save(str(index_folder_dir / 'seg' / fname))
+            transforms_data[frame_id] = scene_dict['camera'].get_model_matrix().tolist()
+        
+        # Create and save 'transforms.json' file
+        transforms_file = index_folder_dir / 'transforms.json'
+        
+        with transforms_file.open('w') as json_file:
+            json.dump(transforms_data, json_file)
+    return pose_dict
+
+def scene_setup(urdf_file, h=480, w=640, n=0.1, f=100):
+    engine = sapien.Engine()
+    renderer = sapien.SapienRenderer(offscreen_only=True)
+    engine.set_renderer(renderer)
+
+    scene = engine.create_scene()
+    scene.set_timestep(1 / 100.0)
+
+    loader = scene.create_urdf_loader()
+    loader.fix_root_link = True
+    asset = loader.load_kinematic(str(urdf_file))
+    assert asset, 'URDF not loaded.'
+
+
+    scene.set_ambient_light([0.5, 0.5, 0.5])
+    scene.add_directional_light([0, 1, -1], [0.5, 0.5, 0.5], shadow=True)
+    scene.add_point_light([1, 2, 2], [1, 1, 1], shadow=True)
+    scene.add_point_light([1, -2, 2], [1, 1, 1], shadow=True)
+    scene.add_point_light([-1, 0, 1], [1, 1, 1], shadow=True)
+
+    near, far = n, f
+    width, height = w, h
+    camera = scene.add_camera(
+        name="camera",
+        width=width,
+        height=height,
+        fovy=np.deg2rad(35),
+        near=near,
+        far=far,
+    )
+    return camera, asset, scene
+    
+if __name__ == '__main__':
+    # test articulation image generation
+    base_path = "/home/s2262444/codes/articulate_object/articulated-object-nerf"
+    urdf_file = base_path + "/data_base/laptop/10211/mobility.urdf"
+    output_dir = base_path + "/data/laptop_art_same_pose"
+    camera, asset, scene = scene_setup(urdf_file)
+    qpos_list = np.arange(10)
+    scene_dict = {
+            "scene": scene,
+            "camera": camera,
+            "asset": asset,
+            "pose": None,
+            "q_pos": None,
+            "save_path": None,
+            "save": None,
+            "pose_fn": None,
+            "camera_mount_actor": None
+        }
+    
+    splits = ('train', 'val')
+    generate_art_imgs(output_dir, 'train', qpos_list, scene_dict, 10, reuse_pose=True)
+    generate_art_imgs(output_dir, 'val', qpos_list, scene_dict, 10)

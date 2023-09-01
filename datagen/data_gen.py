@@ -11,6 +11,8 @@ def parse_args():
     parser.add_argument("--output_dir", type=str, help="path to save the generated images")
     parser.add_argument("--resolution", type=int, default=[512, 512], nargs='+', help="Image resolution, w h, default: w = 512, h = 512")
     parser.add_argument("--save_render_pose_path", type=str, default=None, help="path to save pose for rendering, default is None")
+    parser.add_argument("--gen_art_imgs", type=bool, default=False, help="wheter to generate images with different articulation.")
+    parser.add_argument("--art_nums", type=int, default=10, help="number of different articulation settings")
     
     parser.add_argument("--render_pose_path", type=str, default=None, help="load saved render pose for image generation, defalut is None")
     args = parser.parse_args()
@@ -71,7 +73,19 @@ def main(args):
 
 
     splits = ('train', 'test', 'val')
-    if args.render_pose_path is not None:
+    if args.gen_art_imgs:
+        j_tpyes = get_joint_type(asset)
+        j_limits = get_joint_limit(asset)
+        # generate qpos list
+        range = j_limits[:, 0] - j_limits[:, 1]
+        idx = np.arange(args.art_num).reshape([1, -1]) + 1
+        for id in idx:
+            # calculate the joint pose with j_limits[:,0] + range*id
+            # create folder with id
+            # save image to id folder
+            pass
+        pass
+    elif args.render_pose_path is not None:
         for split in splits:
             generate_img_with_pose(args.render_pose_path, split, camera, asset, scene, object_path=output_path)
     else:

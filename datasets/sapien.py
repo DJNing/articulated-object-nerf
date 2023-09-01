@@ -156,3 +156,14 @@ class SapienDataset(Dataset):
                     'target': img}
 
         return sample
+    
+class SapienPartDataset(SapienDataset):
+    '''
+    Need to load:
+        1. Images and view point
+        2. Object articulation status and type
+        3. Segment mask for evaluation
+    '''
+    def __init__(self, root_dir, split='train', img_wh=(320, 240), model_type=None, white_back=None, eval_inference=None):
+        super().__init__(root_dir, split, img_wh, model_type, white_back, eval_inference)
+        pass
