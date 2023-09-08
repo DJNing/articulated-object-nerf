@@ -5,9 +5,9 @@ import numpy as np
 import os
 from PIL import Image
 from torchvision import transforms as T
-
+from pathlib import Path as P
 from .ray_utils import *
-
+import torch.nn.functional as F
 class SapienDataset(Dataset):
     def __init__(self, root_dir, split='train', img_wh=(320, 240), model_type = None, white_back = None, eval_inference= None):
         self.root_dir = root_dir
@@ -166,4 +166,73 @@ class SapienPartDataset(SapienDataset):
     '''
     def __init__(self, root_dir, split='train', img_wh=(320, 240), model_type=None, white_back=None, eval_inference=None):
         super().__init__(root_dir, split, img_wh, model_type, white_back, eval_inference)
-        pass
+        self.meta_dict = {}
+        self.num_img = None
+        self.num_art = None
+        
+        self.near = 2.0
+        self.far = 6.0
+        
+        self.bounds = np.array([self.near, self.far])
+        self.read_meta()
+
+    def read_meta(self):
+        dataset_path = P(self.root_dir)
+        meta_dict = {}
+        cur_path = dataset_path / self.split
+        art_dirs = sorted([item for item in cur_path.iterdir() if item.is_dir()])
+        for art_dir in art_dirs:
+            cur_meta = json.load(open(str(art_dir/'transforms.json')))
+            cur_img_fnames = os.listdir(str(art_dir/'rgb'))
+            cur_img_files = [str(art_dir / 'rgb' / fname) for fname in cur_img_fnames]
+            cur_seg_files = [str(art_dir / 'seg' / fname) for fname in cur_img_fnames]
+            
+            meta_dict[art_dir.name] = {
+                "meta": cur_meta,
+                "img_fnames": cur_img_files,
+                "seg_fnames": cur_seg_files
+            }
+        self.meta_dict = meta_dict
+        self.num_img = len(cur_img_files)
+        self.num_art = len(art_dirs)
+
+    def __len__(self):
+        return int(self.num_art * self.num_art)
+
+    def __getitem__(self, idx):
+        h, w = self.img_wh
+        img_idx = idx % self.num_art
+        art_idx = idx // self.num_art
+        art_id = 'idx_' + str(art_idx + 1) # articulation 0 is skipped
+        cur_meta = self.meta_dict[art_id]
+        img_fname = cur_meta['img_fnames'][img_idx]
+        seg_fname = cur_meta['seg_fnames'][img_idx]
+        frame_id = P(img_fname).name.split('.')[0]
+        c2w = np.array(cur_meta['meta']['frame'][frame_id])
+        focal = np.array(cur_meta['meta']['focal'])
+        directions = get_ray_directions(h, w, focal)
+        img = self.transform(Image.open(img_fname))
+        seg = np.array(Image.open(seg_fname))
+        # img = torch.from_numpy(img)
+        seg = torch.from_numpy(seg)
+        seg = seg.type(torch.LongTensor)
+        seg = seg - 1 # starts with 2
+        seg[seg<0] = 0
+        valid_mask = (img[-1]>0).flatten() # (H*W) valid color area
+        img = img.view(4, -1).permute(1, 0)
+        img = img[:, :3]*img[:, -1:] + (1-img[:, -1:]) # blend A to RGB
+
+        seg_one_hot = F.one_hot(seg, 3)
+        art_pose = np.array(cur_meta['meta']['qpos'])
+        ret_dict = {
+            "img": img,
+            "seg": seg,
+            "seg_one_hot": seg_one_hot,
+            "c2w":c2w,
+            "art_idx": art_idx,
+            "art_pose": art_pose,
+            "mask": valid_mask,
+            "directions": directions
+        }
+
+        return ret_dict

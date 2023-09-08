@@ -1,0 +1,13 @@
+{
+    "dataset_name": "sapien_part",
+    "root_dir": "data/laptop_art_same_pose",
+    "exp_name": "part_debug",
+    "exp_type": "part_seg",
+    "img_wh": [640, 480],
+    "white_back": true,
+    "batch_size": 1,
+    "num_gpus": 1,
+    "num_epochs": 10,
+    "output_path": "./results_part_seg",
+    "ckpt_path": "results/official/nerf_official/last.ckpt"
+}

@@ -8,7 +8,7 @@ def get_opts():
                         default='/home/ubuntu/data/nerf_example_data/nerf_synthetic/lego',
                         help='root directory of dataset')
     parser.add_argument('--dataset_name', type=str, default='blender',
-                        choices=['blender', 'llff', 'llff_nocs', 'google_scanned', 'objectron', 'srn', 'srn_multi', 'objectron_multi', 'nocs_bckg', 'llff_nsff', 'co3d', 'pd', 'pd_multi_obj', 'pd_multi', 'pd_multi_ae', 'srn_multi_ae', 'pd_multi_obj_ae', 'pd_multi_obj_ae_nocs', 'pd_multi_obj_ae_cv', 'sapien', 'sapien_multi'],
+                        choices=['blender', 'llff', 'llff_nocs', 'google_scanned', 'objectron', 'srn', 'srn_multi', 'objectron_multi', 'nocs_bckg', 'llff_nsff', 'co3d', 'pd', 'pd_multi_obj', 'pd_multi', 'pd_multi_ae', 'srn_multi_ae', 'pd_multi_obj_ae', 'pd_multi_obj_ae_nocs', 'pd_multi_obj_ae_cv', 'sapien', 'sapien_multi', 'sapien_part'],
                         help='which dataset to train/val')
     parser.add_argument('--output_path', type=str, default='./results', help='dir to save the training results.')
     parser.add_argument('--save_path', type=str,
@@ -96,7 +96,7 @@ def get_opts():
     parser.add_argument('--inst_D', type=int, default=4)
     parser.add_argument('--inst_W', type=int, default=128)
     parser.add_argument('--inst_skips', type=list, default=[2])
-    parser.add_argument('--batch_size', type=int, default=1024,
+    parser.add_argument('--batch_size', type=int, default=1,
                         help='batch size')
     # parser.add_argument('--chunk', type=int, default= 16*64,
     #                     help='chunk size to split the input to avoid OOM')
@@ -201,6 +201,15 @@ def get_opts():
 
     parser.add_argument('--exp_type', type=str, default='vanilla',
                         help='experiment type --choose from vanilla, pixel_nerf, pixel_nerf_sphere, groundplanar, triplanar')
+
+    ###########################
+
+    # deformation mlp params
+    parser.add_argument('--deform_layer_num', type=int, default=8, help="number of layers for the deformation mlp")
+    parser.add_argument('--deform_layer_width', type=int, default=512, help="width for hidden layers")
+    parser.add_argument('--deform_input_dim', type=int, default=12+3+1, help="input dim for deformation MLP, normally 3x4, + part_num + articulation length")
+    parser.add_argument('--deform_output_dim', type=int, default=12, help="output dim for deformation mlp, normally 3x3 rotation + 3x1 translation")
+    parser.add_argument('--part_num', type=int, default=2, help="number of parts for the object")
 
     ###########################
 

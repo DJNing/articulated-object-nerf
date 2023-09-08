@@ -94,7 +94,7 @@ def get_depth(camera):
     depth_pil = Image.fromarray(depth_image)
     return depth_pil
 
-def get_joint_type(asset):
+def get_joint_type(asset) -> list:
     joints = asset.get_joints()
     j_type = []
     for joint in joints:
@@ -435,6 +435,7 @@ def generate_art_imgs(output_dir, split, index_list, scene_dict, num_imgs, pose_
         scene_dict['q_pos'] = cur_qpos
         transforms_data = {
         }
+        # qpos_dict[frame_id] = cur_qpos
         # Create subdirectories for 'rgb', 'depth', 'seg'
         for subfolder in ['rgb', 'depth', 'seg']:
             subfolder_dir = index_folder_dir / subfolder
@@ -455,14 +456,19 @@ def generate_art_imgs(output_dir, split, index_list, scene_dict, num_imgs, pose_
             ret_dict = render_img_with_pose(**scene_dict)
             ret_dict['rgba'].save(str(index_folder_dir / 'rgb' / fname))
             ret_dict['depth'].save(str(index_folder_dir / 'depth' / fname))
-            ret_dict['label_1'].save(str(index_folder_dir / 'seg' / fname))
+            ret_dict['label_actor'].save(str(index_folder_dir / 'seg' / fname))
             transforms_data[frame_id] = scene_dict['camera'].get_model_matrix().tolist()
-        
         # Create and save 'transforms.json' file
         transforms_file = index_folder_dir / 'transforms.json'
-        
+        focal = (camera.fx + camera.fy) / 2
+        save_dict = {}
+        save_dict['frame'] = transforms_data
+        save_dict['focal'] = focal
+        joints_type = get_joint_type(asset)
+        save_dict['j_type'] = joints_type
+        save_dict['qpos'] = cur_qpos.tolist()
         with transforms_file.open('w') as json_file:
-            json.dump(transforms_data, json_file)
+            json.dump(save_dict, json_file)
     return pose_dict
 
 def scene_setup(urdf_file, h=480, w=640, n=0.1, f=100):

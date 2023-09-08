@@ -9,6 +9,28 @@ import math
 from einops import rearrange, reduce
 
 
+class CodeLibraryPartSeg(nn.Module):
+    """
+    Code embeddings for part understanding
+    
+    """
+    def __init__(self, hparams) -> None:
+        code_num = hparams.code_num
+        code_length = hparams.code_len
+        
+        
+        # joint type embedding
+        
+        # joint status embedding 
+        
+        # object type embedding
+        
+        pass
+    
+    def forward(self, x) -> dict:
+        
+        pass
+
 class CodeLibraryArticulated(nn.Module):
     """
     Store various codes.
