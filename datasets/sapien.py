@@ -149,11 +149,14 @@ class SapienDataset(Dataset):
                               self.far*torch.ones_like(rays_o[:, :1])],
                               1) # (H*W, 8)
 
-            sample = {'rays_o' :rays[:,:3],
+            sample = {
+                    'rays_o' :rays[:,:3],
                     'rays_d' : view_dirs,
                     'viewdirs' : rays[:,3:6],
                     'instance_mask': valid_mask,             
-                    'target': img}
+                    'target': img,
+                    'directions': self.directions,
+                    'c2w':c2w}
 
         return sample
     
@@ -221,14 +224,14 @@ class SapienPartDataset(SapienDataset):
         valid_mask = (img[-1]>0).flatten() # (H*W) valid color area
         img = img.view(4, -1).permute(1, 0)
         img = img[:, :3]*img[:, -1:] + (1-img[:, -1:]) # blend A to RGB
-
+        seg = seg.view([-1])
         seg_one_hot = F.one_hot(seg, 3)
         art_pose = np.array(cur_meta['meta']['qpos'])
         ret_dict = {
             "img": img,
             "seg": seg,
-            "seg_one_hot": seg_one_hot,
-            "c2w":c2w,
+            "seg_one_hot": seg_one_hot.to(torch.float32),
+            "c2w": c2w,
             "art_idx": art_idx,
             "art_pose": art_pose,
             "mask": valid_mask,

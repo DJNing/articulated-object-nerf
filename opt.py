@@ -1,7 +1,7 @@
 import argparse
 import json
 
-def get_opts():
+def get_parser():
     parser = argparse.ArgumentParser()
     parser.add_argument('--config', type=str, required=True, help="config file for runing")
     parser.add_argument('--root_dir', type=str,
@@ -207,25 +207,20 @@ def get_opts():
     # deformation mlp params
     parser.add_argument('--deform_layer_num', type=int, default=8, help="number of layers for the deformation mlp")
     parser.add_argument('--deform_layer_width', type=int, default=512, help="width for hidden layers")
-    parser.add_argument('--deform_input_dim', type=int, default=12+3+1, help="input dim for deformation MLP, normally 3x4, + part_num + articulation length")
+    parser.add_argument('--deform_input_dim', type=int, default=12+2+1, help="input dim for deformation MLP, normally 3x4, + part_num + articulation length")
     parser.add_argument('--deform_output_dim', type=int, default=12, help="output dim for deformation mlp, normally 3x3 rotation + 3x1 translation")
     parser.add_argument('--part_num', type=int, default=2, help="number of parts for the object")
+    return parser
 
-    ###########################
+def get_opts():
 
-    # parser.add_argument('--ckpt_path', type=str, default='last.ckpt',
-    #                     help='ckpt path')
+    parser = get_parser()
 
     args = parser.parse_args()
     # Load and parse the JSON configuration file
     with open(args.config, "r") as config_file:
         config_data = json.load(config_file)
         
-    # required_args = ["urdf_file", "output_dir"]
-    # missing_args = [arg for arg in required_args if arg not in config_data]
-    # if missing_args:
-    #     raise ValueError(f"Required argument(s) {', '.join(missing_args)} not found in the JSON configuration")
-
     # Update the args namespace with loaded JSON data
     for key, value in config_data.items():
         setattr(args, key, value)

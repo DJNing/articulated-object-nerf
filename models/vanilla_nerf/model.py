@@ -261,6 +261,13 @@ class LitNeRF(LitModel):
                 continue
             batch[k] = v.squeeze(0)
 
+        # get_rays first for debugging
+                
+        rays_o, view_dirs, rays_d = get_rays_torch(batch['directions'], batch['c2w'], True)
+        batch['rays_o'] = rays_o
+        batch['rays_d'] = rays_d
+        batch['viewdirs'] = view_dirs
+
         rendered_results = self.model(
             batch, self.randomized, self.white_bkgd, self.near, self.far
         )
@@ -505,3 +512,43 @@ class LitNeRF(LitModel):
             write_stats(result_path, psnr, ssim, lpips, psnr_obj)
 
         return psnr, ssim, lpips
+
+def get_rays_torch(directions, c2w, output_view_dirs = False):
+    """
+    Get ray origin and normalized directions in world coordinate for all pixels in one image.
+    Reference: https://www.scratchapixel.com/lessons/3d-basic-rendering/
+               ray-tracing-generating-camera-rays/standard-coordinate-systems
+
+    Inputs:
+        directions: (H, W, 3) precomputed ray directions in camera coordinate
+        c2w: (3, 4) transformation matrix from camera coordinate to world coordinate
+
+    Outputs:
+        rays_o: (H*W, 3), the origin of the rays in world coordinate
+        rays_d: (H*W, 3), the normalized direction of the rays in world coordinate
+    """
+    # Rotate ray directions from camera coordinate to the world coordinate
+    rays_d = directions @ c2w[:, :3].T # (H, W, 3)
+    #rays_d /= torch.norm(rays_d, dim=-1, keepdim=True)
+    # The origin of all rays is the camera origin in world coordinate
+    rays_o = c2w[:, 3].expand(rays_d.shape) # (H, W, 3)
+
+    # if output_radii:
+    #     rays_d_orig = directions @ c2w[:, :3].T
+    #     dx = torch.sqrt(torch.sum((rays_d_orig[:-1, :, :] - rays_d_orig[1:, :, :]) ** 2, dim=-1))
+    #     dx = torch.cat([dx, dx[-2:-1, :]], dim=0)
+    #     radius = dx[..., None] * 2 / torch.sqrt(torch.tensor(12, dtype=torch.int8))
+    #     radius = radius.reshape(-1)
+    
+    if output_view_dirs:
+        viewdirs = rays_d
+        viewdirs /= torch.norm(viewdirs, dim=-1, keepdim=True)
+        rays_d = rays_d.view(-1, 3)
+        rays_o = rays_o.view(-1, 3)
+        viewdirs = viewdirs.view(-1, 3)
+        return rays_o, viewdirs, rays_d  
+    else:
+        rays_d /= torch.norm(rays_d, dim=-1, keepdim=True)
+        rays_d = rays_d.view(-1, 3)
+        rays_o = rays_o.view(-1, 3)
+        return rays_o, rays_d
