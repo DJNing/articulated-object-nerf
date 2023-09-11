@@ -11,6 +11,10 @@ from models.vanilla_nerf.helper import mse2psnr, img2mse
 import wandb
 from tqdm import tqdm
 from pytorch_lightning.loggers import WandbLogger
+
+import os
+os.environ["CUDA_DEVICE_ORDER"]="PCI_BUS_ID"   # see issue #152
+os.environ["CUDA_VISIBLE_DEVICES"]="1"
 # wandb_logger = WandbLogger()
 
 
@@ -179,6 +183,6 @@ def train(
         print(f'Epoch [{epoch + 1}/{num_epochs}] Loss: {running_loss / len(dataloader)}')
 
 # %%
-
+torch.autograd.set_detect_anomaly(True)
 train(nerf, train_loader, epochs, optimizer, criterion, opt, seg_layers,\
       view_deform, wandb)

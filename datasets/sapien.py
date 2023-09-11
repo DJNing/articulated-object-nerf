@@ -235,7 +235,10 @@ class SapienPartDataset(SapienDataset):
             "art_idx": art_idx,
             "art_pose": art_pose,
             "mask": valid_mask,
-            "directions": directions
+            "directions": directions,
+            'w': w,
+            'h': h,
+            'focal': focal
         }
 
         return ret_dict
