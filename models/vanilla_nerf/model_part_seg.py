@@ -83,7 +83,7 @@ class NeRFMLP(nn.Module):
         init.xavier_uniform_(self.density_layer.weight)
         init.xavier_uniform_(self.rgb_layer.weight)
 
-    def forward(self, batch):
+    def forward(self, batch, skip_seg=False):
         """
         batch: dictionary
         """
@@ -121,12 +121,17 @@ class NeRFMLP(nn.Module):
         # part_indicator = part_indicator.unsqueeze(0).repeat(n, 1)
         # seg_input = torch.cat((x, part_indicator), dim=1)
         # seg_result = self.seg_layer(seg_input)
-
-        ret_dict = {
+        if skip_seg:
+            ret_dict = {
             'raw_rgb': raw_rgb,
-            'raw_density': raw_density,
-            'seg_feat': x.reshape(-1, num_samples, self.netwidth_condition) 
+            'raw_density': raw_density
         }
+        else:
+            ret_dict = {
+                'raw_rgb': raw_rgb,
+                'raw_density': raw_density,
+                'seg_feat': x.reshape(-1, num_samples, self.netwidth_condition) 
+            }
         
 
         return ret_dict
@@ -182,7 +187,7 @@ class NeRFSeg(nn.Module):
         self.coarse_mlp = NeRFMLP(min_deg_point, max_deg_point, deg_view)
         self.fine_mlp = NeRFMLP(min_deg_point, max_deg_point, deg_view)
 
-    def forward(self, rays, randomized, white_bkgd, near, far, input_dict, i_level):
+    def forward(self, rays, randomized, white_bkgd, near, far, input_dict, i_level, skip_seg=False):
         ret = []
         if i_level == 0:
             # t_vals, samples = helper.sample_along_rays(
@@ -283,7 +288,7 @@ class LitNeRFSeg(LitModel):
     def __init__(
                 self,
                 hparams,
-                lr_init: float = 5.0e-4,
+                lr_init: float = 1e-3,
                 lr_final: float = 5.0e-6,
                 lr_delay_steps: int = 2500,
                 lr_delay_mult: float = 0.01,
@@ -318,7 +323,7 @@ class LitNeRFSeg(LitModel):
         self.optimizer = torch.optim.Adam(
             params=filter(lambda p: p.requires_grad, self.parameters()), lr=self.lr_init, betas=(0.9, 0.999)
         )
-        
+        self.deform_id_loss = torch.nn.MSELoss()
         pass
     
     def setup(self, stage: Optional[str] = None) -> None:
@@ -351,20 +356,33 @@ class LitNeRFSeg(LitModel):
             self.white_bkgd = self.test_dataset.white_back
 
         else:
+            kwargs_test = {
+                "root_dir": self.hparams.root_dir,
+                "img_wh": tuple(self.hparams.img_wh),
+                "white_back": self.hparams.white_back,
+                "model_type": "vanilla_nerf",
+                "eval_inference": self.hparams.render_name,
+            }
+            self.test_dataset = dataset(split="val", **kwargs_test)
             self.train_dataset = dataset(split="train", **kwargs_train)
             self.val_dataset = dataset(split="val", **kwargs_val)
             self.near = self.train_dataset.near
             self.far = self.train_dataset.far
             self.white_bkgd = self.train_dataset.white_back
 
-
-    def model_forawrd(self, batch):
-
-        pix_inds = self.select_train_pix_ind(batch['mask'])
+    def model_forward_test(self, batch, debug=True):
         seg_results = []
         rgb_c_results = []
         rgb_f_results = []
-        for part in range(self.hparams.part_num):
+        deform_c2ws = []
+        if debug:
+            part_num = 1
+            w, h = self.hparams.img_wh
+            pix_inds = torch.arange(0, w*h)
+        else:
+            part_num = self.hparams.part_num
+            pix_inds = self.select_train_pix_ind(batch['mask'])
+        for part in range(part_num):
 
             # get part indicator
             part_indicator = F.one_hot(torch.tensor(part), self.hparams.part_num).reshape([1, -1])
@@ -373,20 +391,166 @@ class LitNeRFSeg(LitModel):
             # view deformation
             # input: c2w + articulation + part indicator
             # apply rigid body transformation
+            
             c2w = batch['c2w'].to(torch.float32)
-            c2w_r = c2w[:3, :3].reshape([1, -1])
-            c2w_t = c2w[:3, -1].reshape([1, -1])
-            articulation = batch['art_pose'].reshape([1, -1])
+            if part == 0:
+                deform_c2w = c2w
+                
+            else:
+                c2w_r = c2w[:3, :3].reshape([1, -1])
+                c2w_t = c2w[:3, -1].reshape([1, -1])
+                articulation = batch['art_pose'].reshape([1, -1])
 
-            deform_input = torch.cat((c2w_r, c2w_t, articulation, part_indicator), dim=1).to(torch.float32)
-            deform_mat = self.view_deform(deform_input)
-            defrom_r = deform_mat[0, :9].reshape([3, 3])
-            deform_t = deform_mat[0, 9:].reshape([3, 1])
-            deform_matrix = torch.eye(4).to(device=defrom_r.device, dtype=defrom_r.dtype)
-            deform_matrix[:3, :3] = defrom_r
-            deform_matrix[:3, -1:] = deform_t
+                deform_input = torch.cat((c2w_r, c2w_t, articulation, part_indicator), dim=1).to(torch.float32)
+                deform_mat = self.view_deform(deform_input)
+                defrom_r = deform_mat[0, :9].reshape([3, 3])
+                deform_t = deform_mat[0, 9:].reshape([3, 1])
+                deform_matrix = torch.eye(4).to(device=defrom_r.device, dtype=defrom_r.dtype)
+                deform_matrix[:3, :3] = defrom_r
+                deform_matrix[:3, -1:] = deform_t
 
-            deform_c2w = torch.matmul(deform_matrix, c2w)
+                deform_c2w = torch.matmul(deform_matrix, c2w)
+
+            deform_c2ws += [deform_c2w]
+
+            # get_rays after deformation
+            rays_o, viewdirs, rays_d = get_rays_torch(batch['directions'], deform_c2w[:3, :], output_view_dirs=True)
+            # something blocking the backprop?
+
+            # get_ray_batch
+            # rays, rays_d, view_dirs, src_img, rgbs, mask = self.get_ray_batch(
+            #     cam_rays, cam_view_dirs, cam_rays_d, img, seg, ray_batch_size=4096
+            # )
+            # split into several chunk
+            batch['rays_o'] = rays_o[pix_inds]
+            batch['rays_d'] = rays_d[pix_inds]
+            batch['viewdirs'] = viewdirs[pix_inds]
+        
+            chunk_len = rays_o.shape[0] // self.hparams.chunk + 1
+            chunk_idxs = torch.arange(0, chunk_len) * self.hparams.chunk
+            chunk_idxs[-1] = rays_o.shape[0]
+            
+            frgb_results = []
+            for i in range(len(chunk_idxs) - 1):
+                batch_chunk = dict()
+                for k, v in batch.items():
+                    if k == "rays_o" or k == "rays_d" or k == "viewdirs":
+                        batch_chunk[k] = v[chunk_idxs[i] : chunk_idxs[i+1]]
+                # NeRF
+                t_vals_coarse, samples_coarse = get_coarse_input(batch_chunk, self.model.num_coarse_samples, self.near, self.far, self.randomized, self.model.lindisp)
+                corase_dict = {
+                    "t_vals": t_vals_coarse,
+                    "samples": samples_coarse
+                }
+                c_result = self.model(batch_chunk, self.randomized, self.white_bkgd, self.near, self.far, corase_dict, i_level=0)
+
+                c_rgb, c_acc, c_weights, c_depth = helper.volumetric_rendering(
+                    c_result["rgb"],
+                    c_result["sigma"],
+                    c_result["t_vals"],
+                    c_result["rays_d"],
+                    self.white_bkgd
+                    )
+
+                t_mids = 0.5 * (t_vals_coarse[..., 1:] + t_vals_coarse[..., :-1])
+                t_vals_fine, samples_fine = get_fine_input(
+                    t_mids, 
+                    c_weights, 
+                    batch_chunk["rays_o"], 
+                    batch_chunk["rays_d"], 
+                    c_result["t_vals"], 
+                    self.model.num_fine_samples, 
+                    self.randomized)
+
+                fine_ip_dict = {
+                    "t_mids": t_mids,
+                    "t_vals": t_vals_fine,
+                    "samples": samples_fine
+                }
+                f_result = self.model(batch_chunk, self.randomized, self.white_bkgd, self.near, self.far, fine_ip_dict, i_level=1)
+
+                f_rgb, f_acc, f_weights, f_depth = helper.volumetric_rendering(
+                    f_result["rgb"],
+                    f_result["sigma"],
+                    f_result["t_vals"],
+                    f_result["rays_d"],
+                    self.white_bkgd
+                    )
+                frgb_results += [f_rgb]
+            
+
+            # segmentation
+            # seg input: seg_feat + part indicator + samples + view dir
+            # seg_feat.shape = [N_rays, num_samples, mlp_netwidth], num_samples unknown 
+            if debug:
+                pass
+            else:
+
+                seg_input = self.gather_seg_input(f_result["seg_feat"], part_indicator)
+
+                seg_init = self.init_seg_layer(seg_input)
+                seg_temp = self.comp_seg_layer(seg_init.squeeze(-1))
+                seg_results += [seg_temp]
+                
+                rgb_c_results += [c_rgb]
+                rgb_f_results += [f_rgb]
+            
+
+            # rgb_coarse = c_result["rgb"]
+            # rgb_fine = f_result["rgb"]
+            # target = batch["target"]
+
+        if debug:
+            seg_pred = None
+            return torch.cat(frgb_results, dim=0)
+        else:
+            # mask the rgb value
+            seg_pred = torch.cat(seg_results, dim=-1)
+
+            return seg_pred, pix_inds, rgb_c_results, rgb_f_results, deform_c2ws
+
+    def model_forawrd(self, batch, debug=False):
+
+        
+        seg_results = []
+        rgb_c_results = []
+        rgb_f_results = []
+        deform_c2ws = []
+        if debug:
+            part_num = 1
+            w, h = self.hparams.img_wh
+            pix_inds = torch.arange(0, w*h)
+        else:
+            part_num = self.hparams.part_num
+            pix_inds = self.select_train_pix_ind(batch['mask'])
+        for part in range(part_num):
+
+            # get part indicator
+            part_indicator = F.one_hot(torch.tensor(part), self.hparams.part_num).reshape([1, -1])
+            part_indicator = part_indicator.to(device=batch['img'].device, dtype=batch['img'].dtype)
+            
+            c2w = batch['c2w'].to(torch.float32)
+            # view deformation
+            # input: c2w + articulation + part indicator
+            # apply rigid body transformation
+            if part != 0:
+                c2w_r = c2w[:3, :3].reshape([1, -1])
+                c2w_t = c2w[:3, -1].reshape([1, -1])
+                articulation = batch['art_pose'].reshape([1, -1])
+
+                deform_input = torch.cat((c2w_r, c2w_t, articulation, part_indicator), dim=1).to(torch.float32)
+                deform_mat = self.view_deform(deform_input)
+                defrom_r = deform_mat[0, :9].reshape([3, 3])
+                deform_t = deform_mat[0, 9:].reshape([3, 1])
+                deform_matrix = torch.eye(4).to(device=defrom_r.device, dtype=defrom_r.dtype)
+                deform_matrix[:3, :3] = defrom_r
+                deform_matrix[:3, -1:] = deform_t
+
+                deform_c2w = torch.matmul(deform_matrix, c2w)
+            else:
+                deform_c2w = c2w
+
+            deform_c2ws += [deform_c2w]
 
             # get_rays after deformation
             rays_o, viewdirs, rays_d = get_rays_torch(batch['directions'], deform_c2w[:3, :], output_view_dirs=True)
@@ -445,19 +609,15 @@ class LitNeRFSeg(LitModel):
             # segmentation
             # seg input: seg_feat + part indicator + samples + view dir
             # seg_feat.shape = [N_rays, num_samples, mlp_netwidth], num_samples unknown 
-            def gather_seg_input(seg_feat, part_indicator, samples=None, view_dir=None):
-                b, n, _ = seg_feat.shape
-                part_ind = part_indicator.repeat([b, n, 1])
-                # adding samples and viewdirs are not supported
+            if debug:
+                pass
+            else:
 
-                cat_list = [seg_feat, part_ind]
+                seg_input = self.gather_seg_input(f_result["seg_feat"], part_indicator)
 
-                return torch.cat(cat_list, dim=-1)
-            seg_input = gather_seg_input(f_result["seg_feat"], part_indicator)
-
-            seg_init = self.init_seg_layer(seg_input)
-            seg_temp = self.comp_seg_layer(seg_init.squeeze(-1))
-            seg_results += [seg_temp]
+                seg_init = self.init_seg_layer(seg_input)
+                seg_temp = self.comp_seg_layer(seg_init.squeeze(-1))
+                seg_results += [seg_temp]
             
 
             # rgb_coarse = c_result["rgb"]
@@ -466,11 +626,13 @@ class LitNeRFSeg(LitModel):
             rgb_f_results += [f_rgb]
             # target = batch["target"]
 
-        
-        # mask the rgb value
-        seg_pred = torch.cat(seg_results, dim=-1)
+        if debug:
+            seg_pred = None
+        else:
+            # mask the rgb value
+            seg_pred = torch.cat(seg_results, dim=-1)
 
-        return seg_pred, pix_inds, rgb_c_results, rgb_f_results
+        return seg_pred, pix_inds, rgb_c_results, rgb_f_results, deform_c2ws
             
     def training_step(self, batch, batch_idx):
         # for k, v in batch.items():
@@ -480,7 +642,7 @@ class LitNeRFSeg(LitModel):
                 continue
             batch[k] = v.squeeze(0) # squeeze the batch_size dim
 
-        seg_pred, pix_inds, c_rgbs, f_rgbs = self.model_forawrd(batch)
+        seg_pred, pix_inds, c_rgbs, f_rgbs, deform_c2ws = self.model_forawrd(batch)
         supervised = True
         if supervised:
             seg_final = F.softmax(seg_pred, dim=-1)
@@ -489,21 +651,11 @@ class LitNeRFSeg(LitModel):
             
             rgb_target = batch['img'][pix_inds]
             # gather part rgb values
-
-            def gather_part_rgb(seg_one_hot, rgb_pred_list, rgb_target):
-                pred_list = []
-                target_list = []
-                for i in range(len(rgb_pred_list)):
-                    cur_idx = seg_one_hot[:, i:i+1].nonzero().squeeze()
-                    cur_pred = rgb_pred_list[i][cur_idx]
-                    cur_target = rgb_target[cur_idx]
-                    pred_list += [cur_target]
-                    target_list += [cur_pred]
-                    
-                return torch.cat(pred_list, dim=0), torch.cat(target_list, dim=0)
             
-            c_pred, c_target = gather_part_rgb(seg_target, c_rgbs, rgb_target)
-            f_pred, f_target = gather_part_rgb(seg_target, f_rgbs, rgb_target)
+            
+            
+            c_pred, c_target = self.gather_part_rgb(seg_target, c_rgbs, rgb_target)
+            f_pred, f_target = self.gather_part_rgb(seg_target, f_rgbs, rgb_target)
 
             loss0 = helper.img2mse(c_pred, c_target)
             loss1 = helper.img2mse(f_pred, f_target)
@@ -511,12 +663,20 @@ class LitNeRFSeg(LitModel):
             psnr0 = helper.mse2psnr(loss0)
             psnr1 = helper.mse2psnr(loss1)
 
-            loss = loss0 + loss1 + seg_loss
+            # c2w_target = torch.eye(4).to(device=c_pred.device, dtype=c_pred.dtype)
 
-            self.log("train/seg_loss", seg_loss, on_step=True)
+            # deform_loss = self.deform_id_loss(deform_c2ws[0], c2w_target)
 
-            self.log("train/psnr1", psnr1, on_step=True, prog_bar=True, logger=True)
+            loss = loss0 + loss1 + seg_loss #+ deform_loss
+            # self.log("train/deform_loss", deform_loss, on_step=True, prog_bar=True, logger=True)
+            self.log("train/seg_loss", seg_loss, on_step=True, prog_bar=True, logger=True)
+
+            # part0_loss = c_loss['part_0'].item() + f_loss['part_0'].item()
+            # part1_loss = c_loss['part_1'].item() + f_loss['part_1'].item()
+            # part0_psnr = helper.mse2psnr(part0_loss)
+            # part1_psnr = helper.mse2psnr(part1_loss)
             self.log("train/psnr0", psnr0, on_step=True, prog_bar=True, logger=True)
+            self.log("train/psnr1", psnr1, on_step=True, prog_bar=True, logger=True)
             self.log("train/loss", loss, on_step=True)
 
         else:
@@ -618,22 +778,72 @@ class LitNeRFSeg(LitModel):
                 batch[k] = batch[k].unsqueeze(-1)
 
         W, H = self.hparams.img_wh
+        # ret = self.render_rays(batch, batch_idx)
+        # # rank = dist.get_rank()
+        # rank = 0
+        # if rank == 0:
+        #     if batch_idx == self.random_batch:
+        #         grid_img = visualize_val_rgb_opa_depth((W, H), batch, ret)
+        #         self.logger.experiment.log({"val/GT_pred rgb": wandb.Image(grid_img)})
 
+        # return self.render_rays(batch, batch_idx)
 
         return None
 
+    @staticmethod
+    def gather_part_rgb(seg_one_hot, rgb_pred_list, rgb_target):
+        pred_list = []
+        target_list = []
+        for i in range(len(rgb_pred_list)):
+            cur_idx = seg_one_hot[:, i:i+1].nonzero().squeeze()
+            cur_pred = rgb_pred_list[i][cur_idx]
+            cur_target = rgb_target[cur_idx]
+            pred_list += [cur_target]
+            target_list += [cur_pred]
+            
+        return torch.cat(pred_list, dim=0), torch.cat(target_list, dim=0)
+    
+    @staticmethod
+    def gather_seg_input(seg_feat, part_indicator, samples=None, view_dir=None):
+        b, n, _ = seg_feat.shape
+        part_ind = part_indicator.repeat([b, n, 1])
+        # adding samples and viewdirs are not supported
+
+        cat_list = [seg_feat, part_ind]
+
+        return torch.cat(cat_list, dim=-1)
+
     def test_step(self, batch, batch_idx):
         for k, v in batch.items():
-            batch[k] = v.squeeze()
-            if k == "radii":
-                batch[k] = v.unsqueeze(-1)
-            if k == "near_obj" or k == "far_obj":
-                batch[k] = batch[k].unsqueeze(-1)
-        return self.render_rays_test(batch, batch_idx)
+            if k == "obj_idx":
+                continue
+            batch[k] = v.squeeze(0) # squeeze the batch_size dim
+        # seperate into multiple chunk
+
+        rgb = self.model_forward_test(batch, debug=True)
+        w, h = self.hparams.img_wh
+        img = rgb.view([h, w, 3])
+        image_dir = os.path.join(
+            "ckpts", self.hparams.exp_name, 'test'
+        )
+        os.makedirs(image_dir, exist_ok=True)
+        store_image(image_dir, [img], "image")
+        return 
 
     def configure_optimizers(self):
+        # params_group = []
+        opt_params = []
+        for p in self.init_seg_layer.parameters():
+            opt_params += [p]
+
+        for p in self.comp_seg_layer.parameters():
+            opt_params += [p]
+
+        for p in self.view_deform.parameters():
+            opt_params += [p]
+
         return torch.optim.Adam(
-            params=filter(lambda p: p.requires_grad, self.parameters()), lr=self.lr_init, betas=(0.9, 0.999)
+            params=iter(opt_params), lr=self.lr_init, betas=(0.9, 0.999)
         )
 
     def optimizer_step(

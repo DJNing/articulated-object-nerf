@@ -1,0 +1,14 @@
+{
+    "dataset_name": "sapien",
+    "root_dir": "data/sapien_single_scene/laptop/10211/80_degree",
+    "exp_name": "nerf_official_debug_new",
+    "exp_type": "vanilla",
+    "img_wh": [640, 480],
+    "white_back": true,
+    "batch_size": 1,
+    "num_gpus": 1,
+    "num_epochs": 10,
+    "run_eval": true,
+    "output_path": "./results/official",
+    "ckpt_path": "results/official/nerf_official/last.ckpt"
+}

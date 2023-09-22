@@ -4,7 +4,21 @@ import numpy as np
 from PIL import Image
 import torchvision.transforms as T
 from torchvision.utils import make_grid
+import matplotlib.pyplot as plt
 
+
+seg_colormap = torch.tensor([
+        [255, 0, 0],   # Red
+        [0, 255, 0],   # Green
+        [0, 0, 255],   # Blue
+        [255, 255, 0], # Yellow
+        [255, 0, 255], # Magenta
+        [0, 255, 255], # Cyan
+        [128, 0, 0],   # Maroon
+        [0, 128, 0],   # Green (dark)
+        [0, 0, 128],   # Blue (dark)
+        [128, 128, 128] # Gray
+    ], dtype=torch.uint8)
 
 def visualize_depth(depth, cmap=cv2.COLORMAP_JET, vmin=None, vmax=None):
     """
@@ -131,6 +145,50 @@ def visualize_val_rgb(img_wh, batch, results):
     pred_rgb = results["comp_rgb"].view(H, W, 3).permute(2, 0, 1).cpu()
     stack = torch.stack([img_gt, pred_rgb])  # (6, 3, H, W)
     grid = make_grid(stack, nrow=1)
+    img = T.ToPILImage()(grid)
+    return img
+
+def reverse_one_hot(a):
+    return torch.argmax(a, dim=-1)
+
+def generate_seg_color_maps(a, b, K):
+    # Assuming you have tensors a and b
+    # a = reverse_one_hot(a)
+    # b = reverse_one_hot(b)
+
+
+    # Create a mask for values equal to 0
+    mask_a = (a == 0)
+    mask_b = (b == 0)
+
+    # Apply the mask to set color_map_a and color_map_b to [0, 0, 0] where a and b are 0
+    color_map_a = seg_colormap[a]
+    color_map_a = color_map_a * (~mask_a[..., None])  # Apply mask to each channel
+
+    color_map_b = seg_colormap[b]
+    color_map_b = color_map_b * (~mask_b[..., None])  # Apply mask to each channel
+
+    return color_map_a, color_map_b
+
+def visualize_val_rgb_seg(img_wh, batch, results):
+    W, H = img_wh
+
+    rgbs = batch["target"]
+    img_gt = rgbs.view(H, W, 3).permute(2, 0, 1).cpu()  # (3, H, W)
+    pred_rgb = results["comp_rgb"].view(H, W, 3).permute(2, 0, 1).cpu()
+    stack = torch.stack([img_gt, pred_rgb])  # (6, 3, H, W)
+
+    seg_target = batch['seg_one_hot'].view(H, W, 3).cpu()
+    seg_pred = results['comp_seg'].view(H, W, 3).cpu()
+
+    seg_target = reverse_one_hot(seg_target)
+    seg_pred = reverse_one_hot(seg_pred)
+
+    seg_target, seg_pred = generate_seg_color_maps(seg_target, seg_pred, K=10)
+    seg_pred = seg_pred.permute(2, 0 ,1).to(torch.float32) / 255
+    seg_target = seg_target.permute(2, 0 ,1).to(torch.float32) / 255
+    stack = torch.stack([img_gt, pred_rgb, seg_target, seg_pred]) 
+    grid = make_grid(stack, nrow=2)
     img = T.ToPILImage()(grid)
     return img
 

@@ -17,7 +17,7 @@ def parse_args():
     parser.add_argument("--render_pose_path", type=str, default=None, help="load saved render pose for image generation, defalut is None")
     args = parser.parse_args()
     parser.add_argument("--qpos", type=float, nargs='+', default=None, help="set object articulation status, list of floats")
-
+    parser.add_argument("--with_seg", type=bool, default=False, help="whether to save seg image with NeRF training data")
     # Load and parse the JSON configuration file
     with open(args.config, "r") as config_file:
         config_data = json.load(config_file)
@@ -71,30 +71,38 @@ def main(args):
     output_path = P(args.output_dir)
     output_path.mkdir(exist_ok=True, parents=True)
 
-
-    splits = ('train', 'test', 'val')
     if args.gen_art_imgs:
-        j_tpyes = get_joint_type(asset)
-        j_limits = get_joint_limit(asset)
-        # generate qpos list
-        range = j_limits[:, 0] - j_limits[:, 1]
-        idx = np.arange(args.art_num).reshape([1, -1]) + 1
-        for id in idx:
-            # calculate the joint pose with j_limits[:,0] + range*id
-            # create folder with id
-            # save image to id folder
-            pass
-        pass
+        
+        qpos_list = np.arange(10)
+        scene_dict = {
+                "scene": scene,
+                "camera": camera,
+                "asset": asset,
+                "pose": None,
+                "q_pos": None,
+                "save_path": None,
+                "save": None,
+                "pose_fn": None,
+                "camera_mount_actor": None
+            }
+        
+        splits = ('train', 'val')
+        generate_art_imgs(output_dir, 'train', qpos_list, scene_dict, 10, reuse_pose=True)
+        generate_art_imgs(output_dir, 'val', qpos_list, scene_dict, 10)
     elif args.render_pose_path is not None:
+        
+        splits = ('train', 'test', 'val')
         for split in splits:
             generate_img_with_pose(args.render_pose_path, split, camera, asset, scene, object_path=output_path)
     else:
+        
+        splits = ('train', 'test', 'val')
         print("generating images for training...")
-        gen_articulated_object_nerf_s1(100, 4, 'train', camera, asset, scene, object_path=output_path, render_pose_file_dir=args.save_render_pose_path)
+        gen_articulated_object_nerf_s1(120, 4, 'train', camera, asset, scene, object_path=output_path, render_pose_file_dir=args.save_render_pose_path, with_seg=args.with_seg)
         print("generating images for validation...")
-        gen_articulated_object_nerf_s1(50, 4, 'test', camera, asset, scene, object_path=output_path, render_pose_file_dir=args.save_render_pose_path)
+        gen_articulated_object_nerf_s1(50, 4, 'test', camera, asset, scene, object_path=output_path, render_pose_file_dir=args.save_render_pose_path, with_seg=args.with_seg)
         print("generating images for testing...")
-        gen_articulated_object_nerf_s1(50, 4, 'val', camera, asset, scene, object_path=output_path, render_pose_file_dir=args.save_render_pose_path)
+        gen_articulated_object_nerf_s1(50, 4, 'val', camera, asset, scene, object_path=output_path, render_pose_file_dir=args.save_render_pose_path, with_seg=args.with_seg)
 
 if __name__ == "__main__":
     args = parse_args()

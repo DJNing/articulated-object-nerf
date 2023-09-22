@@ -1,0 +1,13 @@
+{
+    "dataset_name": "sapien_static_seg",
+    "root_dir": "data/laptop_10211",
+    "exp_name": "nerf_seg",
+    "exp_type": "nerf_seg",
+    "img_wh": [640, 480],
+    "white_back": true,
+    "batch_size": 8192,
+    "num_gpus": 4,
+    "num_epochs": 10,
+    "output_path": "./results/nerf_seg",
+    "nerf_ckpt": "results/laptop/nerf_laptop/last.ckpt"
+}

@@ -1,0 +1,14 @@
+{
+    "dataset_name": "sapien",
+    "root_dir": "data/laptop_10211",
+    "exp_name": "nerf_laptop",
+    "exp_type": "vanilla",
+    "img_wh": [640, 480],
+    "white_back": true,
+    "batch_size": 1,
+    "num_gpus": 1,
+    "num_epochs": 30,
+    "output_path": "./results/laptop",
+    "run_eval": true,
+    "ckpt_path": "results/laptop/nerf_laptop/last.ckpt"
+}

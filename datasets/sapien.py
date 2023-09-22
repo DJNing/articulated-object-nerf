@@ -159,6 +159,150 @@ class SapienDataset(Dataset):
                     'c2w':c2w}
 
         return sample
+
+
+
+class SapienStaticSegDataset(SapienDataset):
+    def __init__(self, root_dir, split='train', img_wh=(320, 240), model_type=None, white_back=None, eval_inference=None):
+        # super().__init__(root_dir, split, img_wh, model_type, white_back, eval_inference)
+        self.root_dir = root_dir
+        self.split = split
+        # self.read_meta()
+        self.white_back = white_back
+
+        self.meta_dict = {}
+        self.num_img = None
+        self.num_art = None
+        
+        self.near = 2.0
+        self.far = 6.0
+        
+        self.bounds = np.array([self.near, self.far])
+        self.dataset_path = P(self.root_dir) / split
+        self.meta = json.load(open(str(self.dataset_path/'transforms.json')))
+        
+        self.focal = self.meta.get('focal', None)
+        self.fnames = sorted(os.listdir(str(self.dataset_path/'rgb')))
+        self.img_wh = img_wh
+        w, h = self.img_wh
+        self.directions = \
+            get_ray_directions(h, w, self.focal)
+        self.define_transforms()
+        if eval_inference is not None:
+            num = len(self.img_files_val)
+            self.image_sizes = np.array([[h, w] for i in range(num)])
+        else:
+            self.image_sizes = np.array([[h, w] for i in range(1)])
+        # self.read_meta()
+        if split == 'train':
+            self.cache_data()
+
+    def cache_data(self):
+        # cache all the images into directions during training, save c2w for all available directions
+        img_list = []
+        seg_list = []
+        c2w_list = []
+        directions_list = []
+        mask_list = []
+        one_hot_list = []
+        for fname in self.fnames:
+            # gather directions, c2w, rgb, seg
+            frame_id = fname.split('.')[0]
+            rgb_fname = self.dataset_path / 'rgb' / fname
+            seg_fname = self.dataset_path / 'seg' / fname
+            img, mask = self.load_img(rgb_fname)
+            seg, one_hot = self.load_seg(seg_fname)
+            c2w = self.transform(np.array(self.meta['frames'][frame_id])).repeat(img.shape[0], 1, 1)
+
+            img_list += [img]
+            mask_list += [mask]
+            seg_list += [seg]
+            one_hot_list += [one_hot]
+            c2w_list += [c2w]
+            directions_list += [self.directions.view([-1, 3])]
+
+        self.all_rgbs = torch.cat(img_list)
+        self.all_segs = torch.cat(seg_list)
+        self.all_dirs = torch.cat(directions_list)
+        self.all_mask = torch.cat(mask_list)
+        self.all_one_hots = torch.cat(one_hot_list)
+        self.all_c2w = torch.cat(c2w_list)
+    
+    def load_img(self, fname):
+        """
+        load image and return a flatten image tensor [H*W, 3] and a vlida mask
+        """
+        img = self.transform(Image.open(str(fname)))
+        valid_mask = (img[-1]>0).flatten() # (H*W) valid color area
+        img = img.view(4, -1).permute(1, 0)
+        img = img[:, :3]*img[:, -1:] + (1-img[:, -1:]) # blend A to RGB
+        return img, valid_mask
+
+    def load_seg(self, fname):
+        seg = np.array(Image.open(str(fname)))
+        seg = torch.from_numpy(seg)
+        seg = seg.type(torch.LongTensor)
+        seg = seg - 1 # part label start from 2
+        seg[seg<0] = 0 # recover background
+        seg = seg.view([-1])
+        seg_one_hot = F.one_hot(seg, 3).to(torch.float32)
+
+        return seg, seg_one_hot
+
+    def __getitem__(self, idx):
+        # get the directions, c2w, rgb, and seg for each ray, and apply get ray for each collected directions during forwarding
+
+        if self.split == 'train':
+            ret_dict = {
+                'c2w': self.all_c2w[idx],
+                'rgb': self.all_rgbs[idx],
+                'seg': self.all_segs[idx],
+                'seg_one_hot': self.all_one_hots[idx],
+                'dirs': self.all_dirs[idx]
+            }
+        else:
+            frame_id = 'r_' + str(idx)
+            c2w = self.transform(np.array(self.meta['frames'][frame_id])).squeeze(0)
+            rgb_fname = self.dataset_path / 'rgb' / (frame_id + '.png')
+            seg_fname = self.dataset_path / 'seg' / (frame_id + '.png')
+            img = self.transform(Image.open(rgb_fname))
+            seg = np.array(Image.open(seg_fname))
+            seg = torch.from_numpy(seg)
+            seg = seg.type(torch.LongTensor)
+            seg = seg - 1 # starts with 2
+            seg[seg<0] = 0
+            valid_mask = (img[-1]>0).flatten() # (H*W) valid color area
+            img = img.view(4, -1).permute(1, 0)
+            img = img[:, :3]*img[:, -1:] + (1-img[:, -1:]) # blend A to RGB
+            seg = seg.view([-1])
+            seg_one_hot = F.one_hot(seg, 3)
+            w, h = self.img_wh
+            rays_o, view_dirs, rays_d = get_rays(self.directions, c2w[:3, :4], True)
+            rays = torch.cat([rays_o, rays_d, 
+                              self.near*torch.ones_like(rays_o[:, :1]),
+                              self.far*torch.ones_like(rays_o[:, :1])],
+                              1) # (H*W, 8)
+            ret_dict = {
+                "img": img,
+                "seg": seg,
+                "seg_one_hot": seg_one_hot.to(torch.float32),
+                "c2w": c2w,
+                "mask": valid_mask,
+                "w": w,
+                "h": h,
+                "directions":self.directions,
+                'original_rays_o' :rays[:,:3],
+                'original_rays_d' : view_dirs,
+                'original_viewdirs' : rays[:,3:6],
+            }
+        return ret_dict
+
+    def __len__(self):
+        if self.split == 'train':
+            return self.all_rgbs.shape[0]
+        else:
+            return len(self.fnames)
+
     
 class SapienPartDataset(SapienDataset):
     '''
@@ -203,7 +347,7 @@ class SapienPartDataset(SapienDataset):
         return int(self.num_art * self.num_art)
 
     def __getitem__(self, idx):
-        h, w = self.img_wh
+        w, h = self.img_wh
         img_idx = idx % self.num_art
         art_idx = idx // self.num_art
         art_id = 'idx_' + str(art_idx + 1) # articulation 0 is skipped

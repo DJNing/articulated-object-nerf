@@ -14,6 +14,49 @@ import torch
 import torch.nn.functional as F
 
 
+def load_state_dict_and_report(model, ckpt_file):
+    # Load the checkpoint file
+    checkpoint = torch.load(ckpt_file)  # Use 'map_location' to load on CPU if needed
+
+    # Get the state_dict from the checkpoint
+    pretrained_state_dict = checkpoint['state_dict']
+
+    # Get the model's state_dict
+    model_state_dict = model.state_dict()
+
+    # Initialize lists to store missing and unexpected keys
+    missing_keys = []
+    unexpected_keys = []
+
+    # Iterate through the keys in the pretrained_state_dict
+    for key, value in pretrained_state_dict.items():
+        if key in model_state_dict:
+            if model_state_dict[key].shape == value.shape:
+                model_state_dict[key] = value
+            else:
+                print(f"Size mismatch for key '{key}': expected {model_state_dict[key].shape}, but got {value.shape}")
+        else:
+            missing_keys.append(key)
+
+    # Check for unexpected keys
+    for key in model_state_dict.keys():
+        if key not in pretrained_state_dict:
+            unexpected_keys.append(key)
+
+    # Load the modified state_dict into the model
+    model.load_state_dict(model_state_dict)
+
+    # Report missing and unexpected keys
+    if missing_keys:
+        print("Missing keys in model state_dict:")
+        for key in missing_keys:
+            print(key)
+
+    if unexpected_keys:
+        print("Unexpected keys in pretrained state_dict:")
+        for key in unexpected_keys:
+            print(key)
+
 def img2mse(x, y):
     return torch.mean((x - y) ** 2)
 
@@ -154,7 +197,7 @@ def get_parameters(models):
     return parameters
 
 
-def volumetric_rendering(rgb, density, t_vals, dirs, white_bkgd, nocs=None):
+def volumetric_rendering(rgb, density, t_vals, dirs, white_bkgd, nocs=None, seg=None):
     eps = 1e-10
 
     dists = torch.cat(
@@ -194,6 +237,90 @@ def volumetric_rendering(rgb, density, t_vals, dirs, white_bkgd, nocs=None):
     else:
         return comp_rgb, acc, weights, depth
 
+def filter_seg_from_acc(seg, acc):
+    """
+    Select rows from tensor a where b is non-zero.
+    
+    Args:
+        seg (torch.Tensor): Input tensor of shape [N, K].
+        acc (torch.Tensor): Input tensor of shape [N, 1].
+        
+    Returns:
+        torch.Tensor: Result tensor of shape [s, K], where s is the number of non-zero values in acc.
+    """
+    # Find indices where b is non-zero
+    non_zero_indices = torch.nonzero(acc.view(-1)).squeeze()
+    
+    # Select rows from tensor a where b is non-zero
+    result = seg[non_zero_indices]
+    
+    return result
+
+def volumetric_rendering_with_seg(rgb, density, t_vals, dirs, white_bkgd, seg, nocs=None, mode='v2'):
+    eps = 1e-10
+
+    dists = torch.cat(
+        [
+            t_vals[..., 1:] - t_vals[..., :-1],
+            torch.ones(t_vals[..., :1].shape, device=t_vals.device) * 1e10,
+        ],
+        dim=-1,
+    )
+    dists = dists * torch.norm(dirs[..., None, :], dim=-1)
+    alpha = 1.0 - torch.exp(-density[..., 0] * dists)
+    accum_prod = torch.cat(
+        [
+            torch.ones_like(alpha[..., :1]),
+            torch.cumprod(1.0 - alpha[..., :-1] + eps, dim=-1),
+        ],
+        dim=-1,
+    )
+
+    weights = alpha * accum_prod
+
+    comp_rgb = (weights[..., None] * rgb).sum(dim=-2)
+
+    if mode == 'v1' or mode=='v3':
+        comp_seg = (weights[..., None] * seg).sum(dim=-2)
+
+    elif mode == 'v2':
+        seg_weights = weights[..., None]
+        seg_bg_weights = 1 - seg_weights
+        seg_fg_weights = seg_weights.repeat([1, 1, 2])
+        final_seg_weights = torch.cat((seg_bg_weights, seg_fg_weights), dim=-1)
+        comp_seg = (final_seg_weights * seg).sum(dim=-2)
+
+    if torch.isnan(comp_rgb).any():
+        print('nan in rgb')
+
+    depth = (weights * t_vals).sum(dim=-1)
+
+    depth = torch.nan_to_num(depth, float("inf"))
+    depth = torch.clamp(depth, torch.min(depth), torch.max(depth))
+
+    acc = weights.sum(dim=-1)
+    inv_eps = 1 / eps
+
+    if white_bkgd:
+        comp_rgb = comp_rgb + (1.0 - acc[..., None])
+
+    if nocs is not None:
+        comp_nocs = (weights[..., None] * nocs).sum(dim=-2)
+        # return comp_rgb, acc, weights, comp_nocs
+    else:
+        # return comp_rgb, acc, weights, depth
+        comp_nocs = None
+
+
+    ret_dict = {
+        'comp_rgb': comp_rgb,
+        'acc': acc,
+        'weights': weights,
+        'depth': depth,
+        'comp_nocs': comp_nocs,
+        'comp_seg':comp_seg
+    }
+    return ret_dict
 
 def get_learning_rate(optimizer):
     for param_group in optimizer.param_groups:
@@ -203,6 +330,12 @@ def get_learning_rate(optimizer):
 def sorted_piecewise_constant_pdf(
     bins, weights, num_samples, randomized, float_min_eps=2**-32
 ):
+    """
+    bins: tensor = [N, 64]
+    weights: tensor = [N, 63]
+    num_samples: int = 128
+    
+    """
     eps = 1e-5
     weight_sum = weights.sum(dim=-1, keepdims=True)
     padding = torch.fmax(torch.zeros_like(weight_sum), eps - weight_sum)

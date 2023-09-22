@@ -194,7 +194,7 @@ def render_img(point, save_path, camera_mount_actor, scene, camera, asset, q_pos
     }
     return ret_dict
 
-def gen_articulated_object_nerf_s1(num_pos_img, radius_, split, camera, asset, scene, object_path, camera_mount_actor=None, theta_range = [0*math.pi, 2*math.pi], phi_range = [0*math.pi, 1*math.pi], render_pose_file_dir = None):
+def gen_articulated_object_nerf_s1(num_pos_img, radius_, split, camera, asset, scene, object_path, camera_mount_actor=None, theta_range = [0*math.pi, 2*math.pi], phi_range = [0*math.pi, 1*math.pi], render_pose_file_dir = None, with_seg=False):
     if split is not None:
         save_base_path = object_path / split
     else:
@@ -204,7 +204,11 @@ def gen_articulated_object_nerf_s1(num_pos_img, radius_, split, camera, asset, s
     save_rgb_path.mkdir(exist_ok=True)
     save_depth_path = save_base_path / 'depth'
     save_depth_path.mkdir(exist_ok=True)
-    
+    if with_seg:
+        save_seg_path = save_base_path / 'seg'
+        save_seg_path.mkdir(exist_ok=True)
+    else:
+        save_seg_path = None
     render_pose_dict = {}
     # j_types = get_joint_type(asset)
     transform_json = {
@@ -232,6 +236,10 @@ def gen_articulated_object_nerf_s1(num_pos_img, radius_, split, camera, asset, s
         depth_fname = save_depth_path / ('depth' + str(i) + '.png')
         depth_pil = ret_dict['depth']
         depth_pil.save(str(depth_fname))
+
+        if with_seg:
+            fname = frame_id + '.png'
+            ret_dict['label_actor'].save(str(save_seg_path / fname))
         
         if ret_dict['max_d'] > max_d:
             max_d = ret_dict['max_d'] 

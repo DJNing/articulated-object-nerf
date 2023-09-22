@@ -17,15 +17,21 @@ def norm8b(x):
     x = (x - x.min()) / (x.max() - x.min())
     return to8b(x)
 
+def get_seg_image(segs):
+    pass
+
 
 def store_image(dirpath, rgbs, name):
+    img_list = []
     for (i, rgb) in enumerate(rgbs):
-        imgname = f"{str(i).zfill(3)}.jpg"
+        imgname = f"{str(i).zfill(3)}.png"
         imgname = name+imgname
         rgbimg = Image.fromarray(to8b(rgb.detach().cpu().numpy()))
         imgpath = os.path.join(dirpath, imgname)
         rgbimg.save(imgpath)
-
+        img_list += [rgbimg]
+    return img_list
+    
 def store_depth_img(dirpath, depths, name):
     depth_maps = []
     for (i, depth) in enumerate(depths):

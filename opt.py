@@ -210,6 +210,11 @@ def get_parser():
     parser.add_argument('--deform_input_dim', type=int, default=12+2+1, help="input dim for deformation MLP, normally 3x4, + part_num + articulation length")
     parser.add_argument('--deform_output_dim', type=int, default=12, help="output dim for deformation mlp, normally 3x3 rotation + 3x1 translation")
     parser.add_argument('--part_num', type=int, default=2, help="number of parts for the object")
+    parser.add_argument('--ray_batch', type=int, default=2048, help="number of rays used during segmentation training.")
+    parser.add_argument('--freeze_nerf', type=bool, default=True, help="whether to freeze the nerf model during segmentation training")
+    parser.add_argument('--nerf_ckpt', type=str, default=None, help="ckpt path for the pretrained nerf model")
+    parser.add_argument('--forward_chunk', type=int, default=16*240, help="chunk size for inference, distinguish from chunk parameter above")
+    parser.add_argument('--seg_mode', type=str, default='v3', help="how to set the segmentation")
     return parser
 
 def get_opts():

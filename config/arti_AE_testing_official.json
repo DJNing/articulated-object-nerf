@@ -1,0 +1,10 @@
+{
+    "dataset_name": "sapien_multi",
+    "root_dir": "data/sapien_single_scene_art", 
+    "exp_name": "sapien_single_scene_articulated",
+    "exp_type": "vanilla_ae_art",
+    "img_wh": [320, 240],
+    "white_back": true,
+    "batch_size": 1,
+    "num_gpus": 4
+}

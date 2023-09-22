@@ -1,0 +1,7 @@
+{
+    "urdf_file": "data_base/laptop/10211/mobility.urdf",
+    "output_dir": "data/laptop_10211/",
+    "resolution": [640, 480],
+    "with_seg": true,
+    "save_render_pose_path": "data/laptop_10211_pose"
+}
