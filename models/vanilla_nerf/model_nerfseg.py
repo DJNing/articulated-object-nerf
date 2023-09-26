@@ -882,7 +882,7 @@ def get_rays_torch(directions, c2w, output_view_dirs = False):
         rays_o: (H*W, 3), the origin of the rays in world coordinate
         rays_d: (H*W, 3), the normalized direction of the rays in world coordinate
     """
-    rays_d = directions @ c2w[:, :3].T # (H, W, 3)
+    rays_d = directions @ c2w[:3, :3].T # (H, W, 3)
     rays_o = c2w[:, 3].expand(rays_d.shape) # (H, W, 3)
     
     if output_view_dirs:
