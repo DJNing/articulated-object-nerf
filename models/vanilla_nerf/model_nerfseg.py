@@ -886,8 +886,8 @@ def get_rays_torch(directions, c2w, output_view_dirs = False):
     rays_o = c2w[:, 3].expand(rays_d.shape) # (H, W, 3)
     
     if output_view_dirs:
-        viewdirs = rays_d
-        viewdirs /= torch.norm(viewdirs, dim=-1, keepdim=True)
+        viewdirs = rays_d.clone()
+        viewdirs /= torch.norm(viewdirs.clone(), dim=-1, keepdim=True)
         rays_d = rays_d.view(-1, 3)
         rays_o = rays_o.view(-1, 3)
         viewdirs = viewdirs.view(-1, 3)
