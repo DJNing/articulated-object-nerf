@@ -9,3 +9,4 @@ ckpts
 draft
 *cache
 .ipynb_checkpoints
+*.gif
