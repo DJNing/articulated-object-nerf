@@ -12,6 +12,81 @@ from utils.visualization import overlay_images
 #     # Set up the SAPIEN scene and camera
 #     camera, asset, scene = scene_setup(urdf_file=urdf)
 #     return camera, asset, scene
+conversion_matrix = np.array([
+    [0, 0, -1],
+    [-1, 0, 0],
+    [0, 1, 0]
+])
+def normalize(v):
+    return v / np.sqrt(np.sum(v**2))
+
+def get_rotation_axis_angle(k, theta):
+    '''
+    Rodrigues' rotation formula
+    args:
+    * k: direction vector of the axis to rotate about
+    * theta: the (radian) angle to rotate with
+    return:
+    * 3x3 rotation matrix
+    '''
+    k = normalize(k)
+    kx, ky, kz = k[0], k[1], k[2]
+    cos, sin = np.cos(theta), np.sin(theta)
+    R = np.zeros((3, 3))
+    R[0, 0] = cos + (kx**2) * (1 - cos)
+    R[0, 1] = kx * ky * (1 - cos) - kz * sin
+    R[0, 2] = kx * kz * (1 - cos) + ky * sin
+    R[1, 0] = kx * ky * (1 - cos) + kz * sin
+    R[1, 1] = cos + (ky**2) * (1 - cos)
+    R[1, 2] = ky * kz * (1 - cos) - kx * sin
+    R[2, 0] = kx * kz * (1 - cos) - ky * sin
+    R[2, 1] = ky * kz * (1 - cos) + kx * sin
+    R[2, 2] = cos + (kz**2) * (1 - cos)
+    return R
+
+def change_apply_change_basis(A, T, P):
+    """
+    Perform change of basis, apply transformation, and change back to the original basis.
+
+    Args:
+    A (numpy.ndarray): The original matrix in the B1 basis.
+    T (numpy.ndarray): The transformation matrix to be applied.
+    P (numpy.ndarray): The change of basis matrix from B1 to B2.
+
+    Returns:
+    numpy.ndarray: The resulting matrix after the entire process, expressed in the B1 basis.
+    """
+    # Step 1: Change A to the B2 basis
+    A_B2 = np.linalg.inv(P).dot(A).dot(P)
+    
+    # Step 2: Apply the transformation T in the B2 basis
+    A_B2_transformed = T.dot(A_B2)
+    
+    # Step 3: Change A_B2_transformed back to the original B1 basis
+    A_B1_transformed = P.dot(A_B2_transformed).dot(np.linalg.inv(P))
+    
+    return A_B1_transformed
+
+def calculate_E2(E1, axis_position, axis_direction, angle_degrees):
+    # Convert the angle from degrees to radians
+    angle_radians = degrees_to_radians(angle_degrees)
+    
+    # Create a 3x3 rotation matrix around the axis
+    R = get_rotation_axis_angle(axis_direction, angle_radians)
+    # Create a 4x4 transformation matrix for the rotation
+    rotation_matrix = np.eye(4)
+    rotation_matrix[:3, :3] = R
+    print(R)
+    
+    # Create a 4x4 transformation matrix for translation to the axis position
+    translation_matrix = np.eye(4)
+    translation_matrix[:3, 3] = axis_position
+    # Calculate E2 by combining translation and rotation with E1
+    # E2 = np.dot(rotation_matrix, np.dot(rotation_matrix, E1))
+    E2 = change_apply_change_basis(E1, rotation_matrix, translation_matrix)
+    return E2
+
+
 def transform_V1_to_V2(joint_state, V1, delta_rotation):
     try:
         # Extract the rotation matrix R_joint from the joint state
@@ -38,7 +113,9 @@ def transform_V1_to_V2(joint_state, V1, delta_rotation):
         T_theta[:3, :3] = R_theta
 
         # Compute V2 by multiplying the transformation matrices
-        V2 = np.dot(np.dot(np.dot(T_joint, T_theta), np.linalg.inv(T_joint)), V1)
+        # V2 = np.dot(np.dot(np.dot(T_joint, T_theta), np.linalg.inv(T_joint)), V1)
+        V2_prime = np.dot(np.linalg.inv(T_joint), np.dot(T_theta, V1))
+        V2 = np.dot(V2_prime, T_joint)
 
         return V2
 
@@ -69,24 +146,59 @@ def load_json_to_dict(fname):
         return None
 # %%
 urdf = 'data_base/laptop/10211/mobility.urdf'
-
+# Load JSON data
+json_fname = './data_base/laptop/10211/mobility_v2.json'
+meta = load_json_to_dict(json_fname)
+for link in meta:
+    if link['joint'] == 'hinge':
+        print(link['id'])
+        print(link['jointData'])
+        origin =  link['jointData']['axis']['origin']
+        direction =  link['jointData']['axis']['direction']
 # Setup the scene
 camera, asset, scene = scene_setup(urdf)
 # %%
-point = random_point_in_sphere(5, theta_range=[1 * math.pi, 1.5*math.pi], phi_range=[0.4*math.pi, 0.5*math.pi])
+# point = random_point_in_sphere(5, theta_range=[-0.01 * math.pi, 0.01*math.pi], phi_range=[0.01*math.pi, 0.01*math.pi])
+
+def point_in_sphere(r, theta, phi):
+    x = r * math.sin(phi) * math.cos(theta)
+    y = r * math.sin(phi) * math.sin(theta)
+    z = r * math.cos(phi)
+    
+    return x, y, z
+
+point = point_in_sphere(5, 1*math.pi, degrees_to_radians(120))
 mat44 = calculate_cam_ext(point)
+print(point)
+print(mat44)
+# print(point)
+# mat44 = np.eye(4)
+# mat44[0, -1] = 4
+# mat44[1, -1] = 2
+# mat44[2, -1] = 1
 camera.set_pose(sapien.Pose.from_transformation_matrix(mat44))
 # Render image with default pose
 render_image(camera, scene, './draft/test_view.png')
+seg_labels = camera.get_uint32_texture('Segmentation')  # [H, W, 4]
+seg_view = seg_labels[..., 1].astype(np.uint8)  # actor-level
+
+art_degree = -50
 
 # Rotate the joint and render a new image
-asset.set_qpos(degrees_to_radians(15))
+asset.set_qpos(degrees_to_radians(art_degree))
 render_image(camera, scene, './draft/test_view_15.png')
+seg_labels = camera.get_uint32_texture('Segmentation')  # [H, W, 4]
+seg_view_15 = seg_labels[..., 1].astype(np.uint8)  # actor-level
 
 # Calculate joint state and transformation
 joint_state = asset.get_links()[-1].pose.to_transformation_matrix()
-v2 = transform_V1_to_V2(joint_state, mat44, degrees_to_radians(15))
+# v2 = transform_V1_to_V2(joint_state, mat44, degrees_to_radians(15))
 
+
+dirs, ori = np.dot(conversion_matrix, direction), np.dot(conversion_matrix, origin)
+
+
+v2 = calculate_E2(mat44, ori, dirs, art_degree)
 # Set the new joint configuration and render the image
 asset.set_qpos(0)
 camera.set_pose(sapien.Pose.from_transformation_matrix(v2))
@@ -102,6 +214,9 @@ overlayed.save('./draft/overlayed_view.png')
 rgba_pil = Image.open('./draft/test_view.png')
 overlayed = overlay_images(rgba_pil, rgba_15_pil, 0.5)
 overlayed.save('./draft/overlayed_art.png')
+
+overlayed = overlay_images(rgba_pil, rgba_v2_pil, 0.5)
+overlayed.save('./draft/overlayed_base.png')
 # %%
 # Load JSON data
 json_fname = './data_base/laptop/10211/mobility_v2.json'
@@ -155,14 +270,80 @@ def transform_V1_to_V2_new(axis_direction, axis_origin, V1, delta_rotation):
     except Exception as e:
         print(f"Error calculating V2: {str(e)}")
         return None
-# %%
-v2 = transform_V1_to_V2_new(direction, origin, mat44, degrees_to_radians(-15))
+def rotate_camera_extrinsic(e1, axis_direction, axis_origin, theta):
+    try:
+        # Create a 3x3 rotation matrix R based on the axis and angle
+        u, v, w = axis_direction
+        x, y, z = axis_origin
+        cos_theta = np.cos(theta)
+        sin_theta = np.sin(theta)
+        one_minus_cos = 1 - cos_theta
 
-# Set the new joint configuration and render the image
-asset.set_qpos(0)
-camera.set_pose(sapien.Pose.from_transformation_matrix(v2))
-render_image(camera, scene, './draft/test_view_15_v2.png')
-rgba_v2_pil = Image.open('./draft/test_view_15_v2.png')
-overlayed = overlay_images(rgba_15_pil, rgba_v2_pil, 0.5)
-overlayed.save('./draft/overlayed_view.png')
+        R = np.array([
+            [cos_theta + u**2 * one_minus_cos, u * v * one_minus_cos - w * sin_theta, u * w * one_minus_cos + v * sin_theta],
+            [v * u * one_minus_cos + w * sin_theta, cos_theta + v**2 * one_minus_cos, v * w * one_minus_cos - u * sin_theta],
+            [w * u * one_minus_cos - v * sin_theta, w * v * one_minus_cos + u * sin_theta, cos_theta + w**2 * one_minus_cos]
+        ])
+
+        # Create a 4x4 transformation matrix T to apply the rotation at the specified origin
+        T = np.eye(4)
+        T[:3, :3] = R
+        T[:3, 3] = [x, y, z]
+
+        # Calculate e2 by multiplying T with e1
+        e2 = np.dot(T, e1)
+
+        return e2
+
+    except Exception as e:
+        print(f"Error calculating e2: {str(e)}")
+        return None
+# %%
+# point = point_in_sphere(5, math.pi, degrees_to_radians(90+15))
+# mat44 = calculate_cam_ext(point)
+# print(point)
+# print(mat44)
+# mat44[2, -1] += 2
+# print(point)
+# mat44 = np.eye(4)
+# mat44[0, -1] = 4
+# mat44[1, -1] = 2
+# mat44[2, -1] = 1
+conversion_matrix = np.array([
+    [0, 0, 1],
+    [1, 0, 0],
+    [0, 1, 0]
+])
+mat_new = rotate_camera_extrinsic(mat44, np.dot(conversion_matrix, direction), np.dot(conversion_matrix, origin), degrees_to_radians(-15))
+camera.set_pose(sapien.Pose.from_transformation_matrix(mat_new))
+# Render image with default pose
+render_image(camera, scene, './draft/test_view_new.png')
+rgba_new_pil = Image.open('./draft/test_view_new.png')
+# %%
+result = overlay_images(rgba_15_pil, rgba_new_pil, 0.5)
+result.save('./draft/overlayed_new.png')
+# %%
+def calculate_E2(E1, axis_position, axis_direction, angle_degrees):
+    # Convert the angle from degrees to radians
+    angle_radians = np.radians(angle_degrees)
+    
+    # Create a 3x3 rotation matrix around the axis
+    R = np.eye(3) + np.sin(angle_radians) * np.cross(np.eye(3), axis_direction) + \
+        (1 - np.cos(angle_radians)) * np.outer(axis_direction, axis_direction)
+    
+    # Create a 4x4 transformation matrix for the rotation
+    rotation_matrix = np.eye(4)
+    rotation_matrix[:3, :3] = R
+    
+    # Create a 4x4 transformation matrix for translation to the axis position
+    translation_matrix = np.eye(4)
+    translation_matrix[:3, 3] = axis_position
+    
+    # Calculate E2 by combining translation and rotation with E1
+    E2 = np.dot(rotation_matrix, np.dot(translation_matrix, E1))
+    
+    return E2
+
+# %%
+links[-1].__dir__()
 # %%
