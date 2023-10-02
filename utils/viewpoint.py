@@ -2,7 +2,7 @@ import numpy as np
 import math
 import torch
 
-conversion_matrix = np.array([
+conversion_matrix_axis = np.array([
     [0, 0, -1],
     [-1, 0, 0],
     [0, 1, 0]
@@ -16,7 +16,7 @@ conversion_matrix_4x4 = np.array([
 ])
 
 def convert_ori_dir(origin, direction):
-    dirs, ori = np.dot(conversion_matrix, direction), np.dot(conversion_matrix, origin)
+    dirs, ori = np.dot(conversion_matrix_axis, direction), np.dot(conversion_matrix_axis, origin)
     return ori, dirs
 
 def change_apply_change_basis(A, T, P):
@@ -65,14 +65,15 @@ def change_apply_change_basis_torch(A, T, P):
     return A_B1_transformed
 
 def calculate_E2(E1, axis_position, axis_direction, angle_degrees):
-    '''
-    calculate the extrinsic params for camera
-    '''
+
+    ori, dirs = convert_ori_dir(axis_position, axis_direction)
+
     # Convert the angle from degrees to radians
     angle_radians = degrees_to_radians(angle_degrees)
     
     # Create a 3x3 rotation matrix around the axis
-    R = get_rotation_axis_angle(axis_direction, angle_radians)
+    R = get_rotation_axis_angle(dirs, angle_radians)
+    
     # Create a 4x4 transformation matrix for the rotation
     rotation_matrix = np.eye(4)
     rotation_matrix[:3, :3] = R
@@ -80,7 +81,11 @@ def calculate_E2(E1, axis_position, axis_direction, angle_degrees):
     
     # Create a 4x4 transformation matrix for translation to the axis position
     translation_matrix = np.eye(4)
-    translation_matrix[:3, 3] = axis_position
+    translation_matrix[:3, 3] = ori
+    import sapien.core as sapien
+    pose = sapien.Pose.from_transformation_matrix(rotation_matrix)
+    print(pose)
+
     # Calculate E2 by combining translation and rotation with E1
     # E2 = np.dot(rotation_matrix, np.dot(rotation_matrix, E1))
     E2 = change_apply_change_basis(E1, rotation_matrix, translation_matrix)

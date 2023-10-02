@@ -20,29 +20,24 @@ conversion_matrix = np.array([
 def normalize(v):
     return v / np.sqrt(np.sum(v**2))
 
-def get_rotation_axis_angle(k, theta):
-    '''
-    Rodrigues' rotation formula
-    args:
-    * k: direction vector of the axis to rotate about
-    * theta: the (radian) angle to rotate with
-    return:
-    * 3x3 rotation matrix
-    '''
-    k = normalize(k)
-    kx, ky, kz = k[0], k[1], k[2]
-    cos, sin = np.cos(theta), np.sin(theta)
-    R = np.zeros((3, 3))
-    R[0, 0] = cos + (kx**2) * (1 - cos)
-    R[0, 1] = kx * ky * (1 - cos) - kz * sin
-    R[0, 2] = kx * kz * (1 - cos) + ky * sin
-    R[1, 0] = kx * ky * (1 - cos) + kz * sin
-    R[1, 1] = cos + (ky**2) * (1 - cos)
-    R[1, 2] = ky * kz * (1 - cos) - kx * sin
-    R[2, 0] = kx * kz * (1 - cos) - ky * sin
-    R[2, 1] = ky * kz * (1 - cos) + kx * sin
-    R[2, 2] = cos + (kz**2) * (1 - cos)
-    return R
+def calculate_E2(E1, axis_position, axis_direction, angle_degrees):
+    # Convert the angle from degrees to radians
+    angle_radians = degrees_to_radians(angle_degrees)
+    
+    # Create a 3x3 rotation matrix around the axis
+    R = get_rotation_axis_angle(axis_direction, angle_radians)
+    # Create a 4x4 transformation matrix for the rotation
+    rotation_matrix = np.eye(4)
+    rotation_matrix[:3, :3] = R
+    print(R)
+    
+    # Create a 4x4 transformation matrix for translation to the axis position
+    translation_matrix = np.eye(4)
+    translation_matrix[:3, 3] = axis_position
+    # Calculate E2 by combining translation and rotation with E1
+    # E2 = np.dot(rotation_matrix, np.dot(rotation_matrix, E1))
+    E2 = change_apply_change_basis(E1, rotation_matrix, translation_matrix)
+    return E2
 
 def change_apply_change_basis(A, T, P):
     """
@@ -67,24 +62,29 @@ def change_apply_change_basis(A, T, P):
     
     return A_B1_transformed
 
-def calculate_E2(E1, axis_position, axis_direction, angle_degrees):
-    # Convert the angle from degrees to radians
-    angle_radians = degrees_to_radians(angle_degrees)
-    
-    # Create a 3x3 rotation matrix around the axis
-    R = get_rotation_axis_angle(axis_direction, angle_radians)
-    # Create a 4x4 transformation matrix for the rotation
-    rotation_matrix = np.eye(4)
-    rotation_matrix[:3, :3] = R
-    print(R)
-    
-    # Create a 4x4 transformation matrix for translation to the axis position
-    translation_matrix = np.eye(4)
-    translation_matrix[:3, 3] = axis_position
-    # Calculate E2 by combining translation and rotation with E1
-    # E2 = np.dot(rotation_matrix, np.dot(rotation_matrix, E1))
-    E2 = change_apply_change_basis(E1, rotation_matrix, translation_matrix)
-    return E2
+def get_rotation_axis_angle(k, theta):
+    '''
+    Rodrigues' rotation formula
+    args:
+    * k: direction vector of the axis to rotate about
+    * theta: the (radian) angle to rotate with
+    return:
+    * 3x3 rotation matrix
+    '''
+    k = normalize(k)
+    kx, ky, kz = k[0], k[1], k[2]
+    cos, sin = np.cos(theta), np.sin(theta)
+    R = np.zeros((3, 3))
+    R[0, 0] = cos + (kx**2) * (1 - cos)
+    R[0, 1] = kx * ky * (1 - cos) - kz * sin
+    R[0, 2] = kx * kz * (1 - cos) + ky * sin
+    R[1, 0] = kx * ky * (1 - cos) + kz * sin
+    R[1, 1] = cos + (ky**2) * (1 - cos)
+    R[1, 2] = ky * kz * (1 - cos) - kx * sin
+    R[2, 0] = kx * kz * (1 - cos) - ky * sin
+    R[2, 1] = ky * kz * (1 - cos) + kx * sin
+    R[2, 2] = cos + (kz**2) * (1 - cos)
+    return R
 
 
 def transform_V1_to_V2(joint_state, V1, delta_rotation):
@@ -167,7 +167,7 @@ def point_in_sphere(r, theta, phi):
     
     return x, y, z
 
-point = point_in_sphere(5, 1.2*math.pi, degrees_to_radians(75))
+point = point_in_sphere(5, 0.5*math.pi, degrees_to_radians(90))
 mat44 = calculate_cam_ext(point)
 print(point)
 print(mat44)
@@ -182,7 +182,7 @@ render_image(camera, scene, './draft/test_view.png')
 seg_labels = camera.get_uint32_texture('Segmentation')  # [H, W, 4]
 seg_view = seg_labels[..., 1].astype(np.uint8)  # actor-level
 view_0 = camera.get_model_matrix()
-art_degree = 100
+art_degree = 25
 
 # Rotate the joint and render a new image
 asset.set_qpos(degrees_to_radians(art_degree))
