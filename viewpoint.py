@@ -167,7 +167,7 @@ def point_in_sphere(r, theta, phi):
     
     return x, y, z
 
-point = point_in_sphere(5, 1*math.pi, degrees_to_radians(120))
+point = point_in_sphere(5, 1.2*math.pi, degrees_to_radians(75))
 mat44 = calculate_cam_ext(point)
 print(point)
 print(mat44)
@@ -181,8 +181,8 @@ camera.set_pose(sapien.Pose.from_transformation_matrix(mat44))
 render_image(camera, scene, './draft/test_view.png')
 seg_labels = camera.get_uint32_texture('Segmentation')  # [H, W, 4]
 seg_view = seg_labels[..., 1].astype(np.uint8)  # actor-level
-
-art_degree = -50
+view_0 = camera.get_model_matrix()
+art_degree = 100
 
 # Rotate the joint and render a new image
 asset.set_qpos(degrees_to_radians(art_degree))
@@ -199,11 +199,12 @@ dirs, ori = np.dot(conversion_matrix, direction), np.dot(conversion_matrix, orig
 
 
 v2 = calculate_E2(mat44, ori, dirs, art_degree)
+# view_2 = calculate_E2(view_0, np.array(origin), np.array(direction), art_degree)
 # Set the new joint configuration and render the image
 asset.set_qpos(0)
 camera.set_pose(sapien.Pose.from_transformation_matrix(v2))
 render_image(camera, scene, './draft/test_view_15_v2.png')
-
+view_1 = camera.get_model_matrix()
 # Overlay images
 rgba_15_pil = Image.open('./draft/test_view_15.png')
 rgba_v2_pil = Image.open('./draft/test_view_15_v2.png')
@@ -346,4 +347,164 @@ def calculate_E2(E1, axis_position, axis_direction, angle_degrees):
 
 # %%
 links[-1].__dir__()
+# %%
+
+camera.set_pose(sapien.Pose.from_transformation_matrix(v2))
+conversion_matrix_4x4 = np.array([
+    [0, -1, 0, 0],
+    [0, 0, -1, 0],
+    [1, 0, 0, 0],
+    [0, 0, 0, 1]
+])
+
+ext_diff = camera.get_extrinsic_matrix() - np.dot(conversion_matrix_4x4, np.linalg.inv(v2)).astype(np.float32)
+ext_diff[abs(ext_diff) < 1e-5] = 0
+
+# %%
+ext_diff
+# %%
+test_view = np.dot(conversion_matrix_4x4, np.linalg.inv(camera.get_extrinsic_matrix())).astype(np.float32)
+# %%
+test_view
+# %%
+viewpoint = camera.get_model_matrix()
+# %%
+viewpoint
+# %%
+ext = camera.get_extrinsic_matrix()
+inv_ext = np.linalg.inv(ext)
+inv_ext[np.abs(inv_ext) < 1e-6] = 0
+test = np.dot(conversion_matrix_4x4, np.linalg.inv(ext)).astype(np.float32)
+test[abs(test)<1e-4] = 0
+# %%
+test
+
+# %%
+viewpoint[np.abs(viewpoint) < 1e-5] = 0
+print(viewpoint)
+# %%
+inv_ext
+# %%
+def create_viewpoint_matrix(camera_pose):
+    # Modify the camera pose matrix directly
+    camera_pose[0, 1] *= -1  # Reverse sign of C01
+    camera_pose[0, 2] *= -1  # Reverse sign of C02
+    camera_pose[1, 0] *= -1  # Reverse sign of C10
+    camera_pose[1, 2] *= -1  # Reverse sign of C12
+    camera_pose[2, 0] *= -1  # Reverse sign of C20
+    camera_pose[2, 1] *= -1  # Reverse sign of C21
+
+    # Return the viewpoint matrix
+    return camera_pose
+# %%
+create_viewpoint_matrix(v2)
+# %%
+viewpoint
+# %%
+np.dot(v2[:3, :3], conversion_matrix)
+# %%
+r1 = viewpoint[:3, :3]
+# %%
+r2 = v2[:3, :3]
+# %%
+np.dot(r1.T, r2)
+# %%
+r1
+# %%
+r2
+# %%
+column_swap = np.array([
+    [0, 0, 1],
+    [1, 0, 0],
+    [0, 1, 0]
+])
+sign_convertion = np.array([
+    [1, -1, -1],
+    [-1, -1, 1],
+    [1, 1, 1]
+])
+r2_swap = np.dot(r2, column_swap)
+print(r2_swap)
+print(r1)
+print(r2_swap * sign_convertion)
+# %%
+# Original matrix A
+A = np.array([[1, 2, 3],
+              [4, 5, 6],
+              [7, 8, 9]])
+
+# Define a permutation matrix for swapping columns 1 and 2
+# In this case, we want to swap the first and second columns, so the permutation matrix is:
+# P = [[0, 1, 0],
+#      [1, 0, 0],
+#      [0, 0, 1]]
+P = np.array([[0, 1, 0],
+              [1, 0, 0],
+              [0, 0, 1]])
+
+# Perform the column swap by multiplying A with the permutation matrix P
+result = np.dot(A, P)
+
+print(result)
+# %%
+np.dot(np.dot(sign_convertion, column_swap), r2)
+# %%
+r1
+# %%
+r2_swap
+# %%
+np.dot(sign_convertion, column_swap)
+# %%
+def pose2view(pose):
+    '''
+    pose: 4x4 matrix
+    '''
+    column_swap = np.array([
+        [0, 0, 1],
+        [1, 0, 0],
+        [0, 1, 0]
+    ])
+    sign_convertion = np.array([
+        [1, -1, -1],
+        [-1, -1, 1],
+        [1, 1, 1]
+    ])
+    R = pose[:3, :3]
+    view_R = np.dot(R, column_swap) * sign_convertion
+    view = np.eye(4)
+    view[:3, :3] = view_R
+    view[:3, -1] = pose[:3, -1]
+    return view
+
+def view2pose(pose):
+    '''
+    pose: 4x4 matrix
+    '''
+    column_swap = np.array([
+        [0, 1, 0],
+        [0, 0, 1],
+        [1, 0, 0]
+    ])
+    sign_convertion = np.array([
+        [1, -1, -1],
+        [-1, -1, 1],
+        [1, 1, 1]
+    ])
+    R = pose[:3, :3] * sign_convertion
+    view_R = np.dot(R, column_swap) 
+    view = np.eye(4)
+    view[:3, :3] = view_R
+    view[:3, -1] = pose[:3, -1]
+    return view
+
+# %%
+pose2view(v2)
+# %%
+diff = v2 - view2pose(pose2view(v2))
+# %%
+diff[abs(diff) < 1e-5] = 0
+# %%
+diff
+# %%
+
 # %%
