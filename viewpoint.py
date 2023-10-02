@@ -508,3 +508,13 @@ diff
 # %%
 
 # %%
+# learnable params: axis direction, axis position, quaternion
+# E1 = view2pose(c2w) --> convert the input c2w to camera extrinsic
+# learnable params: axis direction, axis position, quaternion
+# E2 = calculate_art_ext(E1, axis direction, axis position, quaternion) --> implement calculate_E2 in pytorch
+# c2w_art = pose2view(E2)
+# %%
+dirs
+# %%
+ori
+# %%
