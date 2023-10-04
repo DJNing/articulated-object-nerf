@@ -258,7 +258,8 @@ class SapienStaticSegDataset(SapienDataset):
                 'rgb': self.all_rgbs[idx],
                 'seg': self.all_segs[idx],
                 'seg_one_hot': self.all_one_hots[idx],
-                'dirs': self.all_dirs[idx]
+                'dirs': self.all_dirs[idx],
+                'mask': self.all_mask[idx]
             }
         else:
             frame_id = 'r_' + str(idx)

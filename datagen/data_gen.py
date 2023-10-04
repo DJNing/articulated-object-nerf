@@ -18,6 +18,7 @@ def parse_args():
     args = parser.parse_args()
     parser.add_argument("--qpos", type=float, nargs='+', default=None, help="set object articulation status, list of floats")
     parser.add_argument("--with_seg", type=bool, default=False, help="whether to save seg image with NeRF training data")
+    parser.add_argument("--art_seg_data", type=bool, default=False, help="whether to set all qpos to their upper limit")
     # Load and parse the JSON configuration file
     with open(args.config, "r") as config_file:
         config_data = json.load(config_file)
@@ -94,6 +95,11 @@ def main(args):
         splits = ('train', 'test', 'val')
         for split in splits:
             generate_img_with_pose(args.render_pose_path, split, camera, asset, scene, object_path=output_path)
+    elif args.art_seg_data:
+        gen_articulated_object_nerf_s2(10, 4, 'train', camera, asset, scene, object_path=output_path, \
+                                       render_pose_file_dir=args.save_render_pose_path)
+        generate_articulation_test(50, 4, 'test', camera, asset, scene, object_path=output_path, \
+                                   render_pose_file_dir=args.save_render_pose_path)
     else:
         
         splits = ('train', 'test', 'val')

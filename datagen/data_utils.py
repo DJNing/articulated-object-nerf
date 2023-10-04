@@ -260,6 +260,162 @@ def gen_articulated_object_nerf_s1(num_pos_img, radius_, split, camera, asset, s
         json.dump(transform_json, f)
     pass
 
+def gen_articulated_object_nerf_s2(num_pos_img, radius_, split, camera, asset, scene, object_path, \
+                                   camera_mount_actor=None, theta_range = [0*math.pi, 2*math.pi], \
+                                    phi_range = [0*math.pi, 1*math.pi], render_pose_file_dir = None):
+    
+    with_seg=True
+    dof = asset.dof
+    asset.set_qpos([np.inf] * dof)
+    if split is not None:
+        save_base_path = object_path / split
+    else:
+        save_base_path = object_path
+    save_base_path.mkdir(exist_ok=True)
+    save_rgb_path = save_base_path / 'rgb'
+    save_rgb_path.mkdir(exist_ok=True)
+    save_depth_path = save_base_path / 'depth'
+    save_depth_path.mkdir(exist_ok=True)
+    
+    if with_seg:
+        save_seg_path = save_base_path / 'seg'
+        save_seg_path.mkdir(exist_ok=True)
+    else:
+        save_seg_path = None
+    render_pose_dict = {}
+    # j_types = get_joint_type(asset)
+    transform_json = {
+        "focal": camera.fy
+    }
+    frame_dict = dict()
+    max_d = 0
+    min_d = np.inf
+    for i in tqdm(range(num_pos_img)):
+        instance_save_path = None
+        point = random_point_in_sphere(radius=radius_, theta_range=theta_range, phi_range=phi_range)
+        # point = points[i]
+        ret_dict = render_img(point, instance_save_path, camera_mount_actor, scene, camera, asset, pose_fn=custom_openGL, save=False)
+        frame_id = 'r_'+str(i)
+        c2w = camera.get_model_matrix()
+        frame_dict[frame_id] = c2w.tolist()
+        
+        render_pose = ret_dict['mat44']
+        render_pose_dict[frame_id] = render_pose.tolist()
+        
+        rgb_fname = save_rgb_path / (frame_id + '.png')
+        rgba_pil = ret_dict['rgba']
+        rgba_pil.save(str(rgb_fname))   
+        
+        depth_fname = save_depth_path / ('depth' + str(i) + '.png')
+        depth_pil = ret_dict['depth']
+        depth_pil.save(str(depth_fname))
+
+        if with_seg:
+            fname = frame_id + '.png'
+            ret_dict['label_actor'].save(str(save_seg_path / fname))
+        
+        if ret_dict['max_d'] > max_d:
+            max_d = ret_dict['max_d'] 
+        if ret_dict['min_d'] < min_d:
+            min_d = ret_dict['min_d']
+    print('min_d = ', min_d)
+    print('max_d = ', max_d)
+
+    transform_json['frames'] = frame_dict
+
+    joint_types = [joint.type for joint in asset.get_joints()]
+    transform_json['joint_types'] = joint_types
+    transform_json['qpos'] = asset.get_qpos().tolist()
+
+    transform_fname = str(save_base_path / 'transforms.json')
+    if render_pose_file_dir is not None:
+        P(render_pose_file_dir).mkdir(parents=True, exist_ok=True)
+        render_pose_fname = P(render_pose_file_dir) / (split + '.json')
+        with open(render_pose_fname, 'w') as f:
+            json.dump(render_pose_dict, f)
+            
+    with open(transform_fname, 'w') as f:
+        json.dump(transform_json, f)
+    pass
+
+def generate_articulation_test(num_pos_img, radius_, split, camera, asset, scene, object_path, \
+                                   camera_mount_actor=None, theta_range = [0*math.pi, 2*math.pi], \
+                                    phi_range = [0*math.pi, 1*math.pi], render_pose_file_dir = None):
+    with_seg=True
+    if split is not None:
+        save_base_path = object_path / split
+    else:
+        save_base_path = object_path
+    save_base_path.mkdir(exist_ok=True)
+    save_rgb_path = save_base_path / 'rgb'
+    save_rgb_path.mkdir(exist_ok=True)
+    save_depth_path = save_base_path / 'depth'
+    save_depth_path.mkdir(exist_ok=True)
+    
+    if with_seg:
+        save_seg_path = save_base_path / 'seg'
+        save_seg_path.mkdir(exist_ok=True)
+    else:
+        save_seg_path = None
+    render_pose_dict = {}
+    # j_types = get_joint_type(asset)
+    transform_json = {
+        "focal": camera.fy
+    }
+    frame_dict = dict()
+    max_d = 0
+    min_d = np.inf
+
+    dof = asset.dof
+    qlimits = asset.get_qlimits()
+    qrange = qlimits[:, 1] - qlimits[:, 0]
+    qpos_list = np.random.randn(num_pos_img, dof)
+    qpos_list = qpos_list * qrange - qlimits[:,0]
+
+
+    for i in tqdm(range(num_pos_img)):
+        instance_save_path = None
+        point = random_point_in_sphere(radius=radius_, theta_range=theta_range, phi_range=phi_range)
+        asset.set_qpos(qpos_list[i])
+        # point = points[i]
+        ret_dict = render_img(point, instance_save_path, camera_mount_actor, scene, camera, asset, pose_fn=custom_openGL, save=False)
+        frame_id = 'r_'+str(i)
+        c2w = camera.get_model_matrix()
+        frame_dict[frame_id] = c2w.tolist()
+        
+        render_pose = ret_dict['mat44']
+        render_pose_dict[frame_id] = render_pose.tolist()
+        
+        rgb_fname = save_rgb_path / (frame_id + '.png')
+        rgba_pil = ret_dict['rgba']
+        rgba_pil.save(str(rgb_fname))   
+        
+        depth_fname = save_depth_path / ('depth' + str(i) + '.png')
+        depth_pil = ret_dict['depth']
+        depth_pil.save(str(depth_fname))
+
+        if with_seg:
+            fname = frame_id + '.png'
+            ret_dict['label_actor'].save(str(save_seg_path / fname))
+        
+        if ret_dict['max_d'] > max_d:
+            max_d = ret_dict['max_d'] 
+        if ret_dict['min_d'] < min_d:
+            min_d = ret_dict['min_d']
+    print('min_d = ', min_d)
+    print('max_d = ', max_d)
+
+    transform_json['frames'] = frame_dict
+    
+    joint_types = [joint.type for joint in asset.get_joints()]
+    transform_json['joint_types'] = joint_types
+    transform_json['qpos'] = qpos_list.tolist()
+    transform_fname = str(save_base_path / 'transforms.json')
+    with open(transform_fname, 'w') as f:
+        json.dump(transform_json, f)
+    pass
+
+
 def generate_img_with_pose(pose_dir, split, camera, asset, scene, object_path, camera_mount_actor=None, qpos=0):
     
     if split is not None:
