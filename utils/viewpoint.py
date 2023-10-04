@@ -128,17 +128,12 @@ def pose2view(pose):
     pose: 4x4 matrix
     '''
     column_swap = np.array([
-        [0, 0, 1],
-        [1, 0, 0],
+        [0, 0, -1],
+        [-1, 0, 0],
         [0, 1, 0]
     ])
-    sign_convertion = np.array([
-        [1, -1, -1],
-        [-1, -1, 1],
-        [1, 1, 1]
-    ])
     R = pose[:3, :3]
-    view_R = np.dot(R, column_swap) * sign_convertion
+    view_R = np.dot(R, column_swap) 
     view = np.eye(4)
     view[:3, :3] = view_R
     view[:3, -1] = pose[:3, -1]
@@ -149,21 +144,21 @@ def view2pose(view):
     pose: 4x4 matrix
     '''
     column_swap = np.array([
-        [0, 1, 0],
+        [0, -1, 0],
         [0, 0, 1],
-        [1, 0, 0]
+        [-1, 0, 0]
     ])
-    sign_convertion = np.array([
-        [1, -1, -1],
-        [-1, -1, 1],
-        [1, 1, 1]
-    ])
-    R = view[:3, :3] * sign_convertion
+    # sign_convertion = np.array([
+    #     [1, -1, -1],
+    #     [-1, -1, 1],
+    #     [1, 1, 1]
+    # ])
+    R = view[:3, :3] 
     pose_R = np.dot(R, column_swap) 
     pose = np.eye(4)
     pose[:3, :3] = pose_R
     pose[:3, -1] = view[:3, -1]
-    return view
+    return pose
 
 def pose2view_torch(pose):
     """
@@ -176,8 +171,8 @@ def pose2view_torch(pose):
     torch.Tensor: 4x4 view matrix.
     """
     column_swap = torch.tensor([
-        [0, 0, 1],
-        [1, 0, 0],
+        [0, 0, -1],
+        [-1, 0, 0],
         [0, 1, 0]
     ], dtype=torch.float32).to(pose)
     
@@ -188,7 +183,7 @@ def pose2view_torch(pose):
     ], dtype=torch.float32).to(pose)
 
     R = pose[:3, :3]
-    view_R = torch.matmul(R, column_swap) * sign_conversion
+    view_R = torch.matmul(R, column_swap)
     view = torch.eye(4, dtype=torch.float32).to(pose)
     view[:3, :3] = view_R
     view[:3, -1] = pose[:3, -1]
@@ -200,9 +195,9 @@ def view2pose_torch(view):
     view: 4x4 matrix (torch.Tensor)
     '''
     column_swap = torch.Tensor([
-        [0, 1, 0],
+        [0, -1, 0],
         [0, 0, 1],
-        [1, 0, 0]
+        [-1, 0, 0]
     ]).to(view)
     sign_conversion = torch.Tensor([
         [1, -1, -1],
@@ -211,7 +206,7 @@ def view2pose_torch(view):
     ]).to(view)
     
     # Extract the rotation matrix R from the view matrix and apply sign conversion
-    R = view[:3, :3] * sign_conversion
+    R = view[:3, :3]
     
     # Compute the pose rotation matrix by applying column swapping
     pose_R = torch.matmul(R, column_swap)
