@@ -28,14 +28,58 @@ from models.vanilla_nerf.util import *
 from models.interface import LitModel
 import wandb
 import random
-
+from utils.viewpoint import view2pose_torch, pose2view_torch, change_apply_change_basis_torch
+from utils.rotation import R_from_quaternions
 torch.backends.cudnn.deterministic = True
 torch.backends.cudnn.benchmark = False
 
 np.random.seed(0)
 random.seed(0)
 
+class ArticulationEstimation(nn.Module):
+    '''
+    Current implemetation for revolute only
+    '''
+    def __init__(self, mode='qua') -> None:
+        super().__init__()
+        if mode == 'qua':
+            pass
+        elif mode == 'rad': #radian
+            pass
+        elif mode == 'deg': # degree
+            pass
+        else:
+            raise RuntimeError('mode == %s for ArticulationEstimation is not defined' % mode)
+        
+        # perfect init
+        # init_Q = torch.Tensor([ 0.9962,  0.0000, -0.0872,  0.0000])
+        # axis_origin = torch.Tensor([ 0.24714715,  0.        , -0.00770604])
+        # normal init
+        init_Q = torch.Tensor([1, 0, 0, 0])
+        axis_origin = torch.Tensor([ 0, 0, 0])
 
+        # axis angle can be obtained from quaternion
+        # axis_direction = torch.Tensor([0, 0, 0])
+
+        self.Q = nn.Parameter(init_Q, requires_grad = True)
+        self.axis_origin = nn.Parameter(axis_origin, requires_grad = True)
+        # self.axis_direction = nn.Parameter(axis_direction, requires_grad = True)
+
+
+    def forward(self, c2w) -> torch.Tensor():
+        '''
+        input: c2w
+        '''
+        E1 = view2pose_torch(c2w)
+        translation_matrix = torch.eye(4).to(c2w)
+        translation_matrix[:3, 3] = self.axis_origin.view([3])
+        rotation_matrix = torch.eye(4).to(c2w)
+        R = R_from_quaternions(self.Q)
+        rotation_matrix[:3, :3] = R
+        E2 = change_apply_change_basis_torch(E1, rotation_matrix, translation_matrix)
+        view = pose2view_torch(E2)
+        return view
+    
 class NeRFMLPSeg(nn.Module):
     def __init__(
         self,
@@ -305,7 +349,6 @@ class LitNeRFSeg_v2(LitModel):
             # ckpt_dict = torch.load(self.hparam.ckpt_path)['state_dict']
             # self.load_state_dict(ckpt_dict, strict=False)
             helper.load_state_dict_and_report(self, self.hparams.nerf_ckpt)
-        self.sanity_check = False
         pass
 
     def setup(self, stage: Optional[str] = None) -> None:
@@ -833,6 +876,12 @@ class LitNeRFSeg_v2(LitModel):
             write_stats(result_path, psnr, ssim, lpips, psnr_obj)
             self.logger.log_image(key = "test/results", images = img_list)
         return psnr, ssim, lpips
+# =========================================================================================
+# =================================== end of v2 ===========================================
+# =========================================================================================
+
+
+
 
 def get_rays_torch_multiple_c2w(directions, c2w, output_view_dirs=False):
     """
