@@ -1,13 +1,3 @@
-# ------------------------------------------------------------------------------------
-# NeRF-Factory
-# Copyright (c) 2022 POSTECH, KAIST, Kakao Brain Corp. All Rights Reserved.
-# Licensed under the Apache License, Version 2.0 [see LICENSE for details]
-# ------------------------------------------------------------------------------------
-# ------------------------------------------------------------------------------------
-# Modified from NeRF (https://github.com/bmild/nerf)
-# Copyright (c) 2020 Google LLC. All Rights Reserved.
-# ------------------------------------------------------------------------------------
-
 import os
 from random import random
 from typing import *
@@ -95,7 +85,9 @@ class NeRFMLPSeg(nn.Module):
         input_ch_view: int = 3,
         num_rgb_channels: int = 3,
         num_density_channels: int = 1,
-        num_part: int = 2
+        num_part: int = 2,
+        use_res_seg: bool = True,
+        use_part_condition: bool = True
     ):
         for name, value in vars().items():
             if name not in ["self", "__class__"]:
@@ -134,15 +126,28 @@ class NeRFMLPSeg(nn.Module):
         self.rgb_layer = nn.Linear(netwidth_condition, num_rgb_channels)
         self.netwidth_condition = netwidth_condition 
         
-        self.seg_layer = nn.Linear(netwidth_condition, num_part+1)
+        self.use_res_seg = use_res_seg
+        if self.use_res_seg:
+            # self.seg_layer = nn.Linear(netwidth_condition + pos_size, num_part + 1)
+            seg_in_dim = netwidth_condition + pos_size
+        else:
+            # self.seg_layer = nn.Linear(netwidth_condition, num_part+1)
+            seg_in_dim = netwidth_condition
+        self.use_part_condition = use_part_condition
+        if self.use_part_condition:
+            seg_in_dim += num_part
+            seg_out_dim = 1
+        else:
+            seg_out_dim = num_part + 1
+        self.seg_out_dim = seg_out_dim
+        self.seg_layer = nn.Linear(seg_in_dim, seg_out_dim)
         self.num_part = num_part
-
         init.xavier_uniform_(self.bottleneck_layer.weight)
         init.xavier_uniform_(self.density_layer.weight)
         init.xavier_uniform_(self.rgb_layer.weight)
         init.xavier_uniform_(self.seg_layer.weight)
 
-    def forward(self, x, condition):
+    def forward(self, x, condition, part_code):
         num_samples, feat_dim = x.shape[1:]
         x = x.reshape(-1, feat_dim)
         inputs = x
@@ -166,7 +171,15 @@ class NeRFMLPSeg(nn.Module):
             x = self.net_activation(x)
 
         raw_rgb = self.rgb_layer(x).reshape(-1, num_samples, self.num_rgb_channels)
-        raw_seg = self.seg_layer(x).reshape(-1, num_samples, self.num_part + 1)
+        if self.use_res_seg:
+            seg_input = torch.cat((x, inputs), dim=-1)
+        else:
+            seg_input = x
+
+        if self.use_part_condition:
+            part_code = part_code.repeat(seg_input.shape[0], 1)
+            seg_input = torch.cat((seg_input, part_code), dim=-1)
+        raw_seg = self.seg_layer(seg_input).reshape(-1, num_samples, self.seg_out_dim)
         
         ret_dict = {
             "raw_rgb": raw_rgb,
@@ -284,7 +297,8 @@ class NeRFSeg(nn.Module):
                 self.max_deg_point,
             )
             viewdirs_enc = helper.pos_enc(rays["viewdirs"], 0, self.deg_view)
-            mlp_ret_dict = mlp(samples_enc, viewdirs_enc)
+            part_code = rays.get('part_code', None)
+            mlp_ret_dict = mlp(samples_enc, viewdirs_enc, part_code)
             raw_rgb = mlp_ret_dict['raw_rgb']
             raw_density = mlp_ret_dict['raw_density']
             
@@ -341,8 +355,8 @@ class LitNeRFSeg_v2(LitModel):
         self.hparams.update(vars(hparams))
         super(LitNeRFSeg_v2, self).__init__()
 
-        if self.hparams.inerf:
-            pass
+        # if self.hparams.inerf:
+        #     pass
 
         self.model = NeRFSeg(self.hparams)
         if self.hparams.nerf_ckpt is not None:

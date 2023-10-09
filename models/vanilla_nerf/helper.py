@@ -60,6 +60,10 @@ def load_state_dict_and_report(model, ckpt_file):
 def img2mse(x, y):
     return torch.mean((x - y) ** 2)
 
+def img2mse_weighted(x, y, prob):
+    result = prob(x - y)
+    loss = torch.mean(result ** 2)
+    return loss
 
 def mse2psnr(x):
     return -10.0 * torch.log(x) / np.log(10)
