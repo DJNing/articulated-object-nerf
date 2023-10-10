@@ -1,6 +1,7 @@
 import numpy as np
 import math
 import torch
+import sapien.core as sapien
 
 conversion_matrix_axis = np.array([
     [0, 0, -1],
@@ -63,6 +64,29 @@ def change_apply_change_basis_torch(A, T, P):
     A_B1_transformed = torch.matmul(torch.matmul(P, A_B2_transformed), torch.inverse(P))
     
     return A_B1_transformed
+
+def get_local_art_GT(axis_pos, axis_dir, angles, is_degree=True):
+    ori, dirs = convert_ori_dir(axis_pos, axis_dir)
+
+    if is_degree:
+        # Convert the angle from degrees to radians
+        angle_radians = degrees_to_radians(angles)
+    else:
+        angle_radians = angles
+    
+    # Create a 3x3 rotation matrix around the axis
+    R = get_rotation_axis_angle(dirs, angle_radians)
+    
+    # Create a 4x4 transformation matrix for the rotation
+    rotation_matrix = np.eye(4)
+    rotation_matrix[:3, :3] = R
+    print(R)
+    
+    # Create a 4x4 transformation matrix for translation to the axis position
+    translation_matrix = np.eye(4)
+    translation_matrix[:3, 3] = ori
+    pose = sapien.Pose.from_transformation_matrix(rotation_matrix)
+    return ori, dirs, pose
 
 def calculate_E2(E1, axis_position, axis_direction, angle_degrees):
 

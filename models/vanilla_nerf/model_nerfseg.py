@@ -42,7 +42,7 @@ class ArticulationEstimation(nn.Module):
             raise RuntimeError('mode == %s for ArticulationEstimation is not defined' % mode)
         
         # perfect init
-        init_Q = torch.Tensor([ 0.9962,  0.0000, -0.0872,  0.0000])
+        init_Q = torch.Tensor([0.97237, 0, -0.233445, 0]) # asset.set_qpos(np.inf * asset.dof)
         axis_origin = torch.Tensor([ 0.24714715,  0.        , -0.00770604])
         # normal init
         # init_Q = torch.Tensor([1, 0, 0, 0])
