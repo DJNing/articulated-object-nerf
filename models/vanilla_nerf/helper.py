@@ -61,7 +61,7 @@ def img2mse(x, y):
     return torch.mean((x - y) ** 2)
 
 def img2mse_weighted(x, y, prob):
-    result = prob(x - y)
+    result = prob * (x - y)
     loss = torch.mean(result ** 2)
     return loss
 

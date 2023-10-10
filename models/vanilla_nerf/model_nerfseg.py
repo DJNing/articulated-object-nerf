@@ -42,11 +42,11 @@ class ArticulationEstimation(nn.Module):
             raise RuntimeError('mode == %s for ArticulationEstimation is not defined' % mode)
         
         # perfect init
-        # init_Q = torch.Tensor([ 0.9962,  0.0000, -0.0872,  0.0000])
-        # axis_origin = torch.Tensor([ 0.24714715,  0.        , -0.00770604])
+        init_Q = torch.Tensor([ 0.9962,  0.0000, -0.0872,  0.0000])
+        axis_origin = torch.Tensor([ 0.24714715,  0.        , -0.00770604])
         # normal init
-        init_Q = torch.Tensor([1, 0, 0, 0])
-        axis_origin = torch.Tensor([ 0, 0, 0])
+        # init_Q = torch.Tensor([1, 0, 0, 0])
+        # axis_origin = torch.Tensor([ 0, 0, 0])
 
         # axis angle can be obtained from quaternion
         # axis_direction = torch.Tensor([0, 0, 0])
@@ -211,6 +211,7 @@ class NeRFSeg(nn.Module):
         super(NeRFSeg, self).__init__()
         
         self.rgb_activation = nn.Sigmoid()
+        self.seg_activation = nn.Sigmoid()
         self.sigma_activation = nn.ReLU()
         self.coarse_mlp = NeRFMLPSeg(min_deg_point, max_deg_point, deg_view)
         self.fine_mlp = NeRFMLPSeg(min_deg_point, max_deg_point, deg_view)
@@ -309,14 +310,14 @@ class NeRFSeg(nn.Module):
 
             rgb = self.rgb_activation(raw_rgb)
             density = self.sigma_activation(raw_density)
-
+            seg = self.seg_activation(raw_seg)
             render_dict = helper.volumetric_rendering_with_seg(
                 rgb, 
                 density,
                 t_vals,
                 rays["rays_d"],
                 white_bkgd=white_bkgd,
-                seg=raw_seg,
+                seg=seg,
                 mode=self.hparams.seg_mode
             )
 
