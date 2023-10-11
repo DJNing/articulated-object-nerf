@@ -215,6 +215,7 @@ def get_parser():
     parser.add_argument('--nerf_ckpt', type=str, default=None, help="ckpt path for the pretrained nerf model")
     parser.add_argument('--forward_chunk', type=int, default=16*240, help="chunk size for inference, distinguish from chunk parameter above")
     parser.add_argument('--seg_mode', type=str, default='v3', help="how to set the segmentation")
+    parser.add_argument('--use_part_condition', type=bool, default=False, help="whether to use conditioned segmentation")
     return parser
 
 def get_opts():

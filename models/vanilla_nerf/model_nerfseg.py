@@ -30,7 +30,7 @@ class ArticulationEstimation(nn.Module):
     '''
     Current implemetation for revolute only
     '''
-    def __init__(self, mode='qua') -> None:
+    def __init__(self, mode='qua', perfect_init=False) -> None:
         super().__init__()
         if mode == 'qua':
             pass
@@ -41,12 +41,14 @@ class ArticulationEstimation(nn.Module):
         else:
             raise RuntimeError('mode == %s for ArticulationEstimation is not defined' % mode)
         
-        # perfect init
-        init_Q = torch.Tensor([0.97237, 0, -0.233445, 0]) # asset.set_qpos(np.inf * asset.dof)
-        axis_origin = torch.Tensor([ 0.24714715,  0.        , -0.00770604])
+        if perfect_init:
+            # perfect init
+            init_Q = torch.Tensor([0.97237, 0, -0.233445, 0]) # asset.set_qpos(np.inf * asset.dof)
+            axis_origin = torch.Tensor([ 0.24714715,  0.        , -0.00770604])
         # normal init
-        # init_Q = torch.Tensor([1, 0, 0, 0])
-        # axis_origin = torch.Tensor([ 0, 0, 0])
+        else:
+            init_Q = torch.Tensor([1, 0, 0, 0])
+            axis_origin = torch.Tensor([ 0, 0, 0])
 
         # axis angle can be obtained from quaternion
         # axis_direction = torch.Tensor([0, 0, 0])
@@ -211,10 +213,10 @@ class NeRFSeg(nn.Module):
         super(NeRFSeg, self).__init__()
         
         self.rgb_activation = nn.Sigmoid()
-        self.seg_activation = nn.Sigmoid()
+        self.seg_activation = nn.ReLU()
         self.sigma_activation = nn.ReLU()
-        self.coarse_mlp = NeRFMLPSeg(min_deg_point, max_deg_point, deg_view)
-        self.fine_mlp = NeRFMLPSeg(min_deg_point, max_deg_point, deg_view)
+        self.coarse_mlp = NeRFMLPSeg(min_deg_point, max_deg_point, deg_view, use_part_condition=hparams.use_part_condition)
+        self.fine_mlp = NeRFMLPSeg(min_deg_point, max_deg_point, deg_view, use_part_condition=hparams.use_part_condition)
 
     def forward_img(self, batch, randomized, white_bkgd, near, far, skip_seg=False):
 
