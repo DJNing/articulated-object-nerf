@@ -212,7 +212,7 @@ class NeRFSeg(nn.Module):
 
         super(NeRFSeg, self).__init__()
         
-        self.rgb_activation = nn.Sigmoid()
+        self.rgb_activation = nn.Sigmoid() 
         self.seg_activation = nn.ReLU()
         self.sigma_activation = nn.ReLU()
         self.coarse_mlp = NeRFMLPSeg(min_deg_point, max_deg_point, deg_view, use_part_condition=hparams.use_part_condition)
@@ -313,7 +313,17 @@ class NeRFSeg(nn.Module):
             rgb = self.rgb_activation(raw_rgb)
             density = self.sigma_activation(raw_density)
             seg = self.seg_activation(raw_seg)
-            render_dict = helper.volumetric_rendering_with_seg(
+            # render_dict = helper.volumetric_rendering_with_seg(
+            #     rgb, 
+            #     density,
+            #     t_vals,
+            #     rays["rays_d"],
+            #     white_bkgd=white_bkgd,
+            #     seg=seg,
+            #     mode=self.hparams.seg_mode
+            # )
+
+            render_dict = helper.volumetric_seg_rendering(
                 rgb, 
                 density,
                 t_vals,

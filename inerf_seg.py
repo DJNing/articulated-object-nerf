@@ -223,7 +223,7 @@ optimizer = torch.optim.Adam([seg_opt_dict], lr=seg_lr)
 # result = []
 data_root = P("data/laptop_10211_art_seg/train/")
 transform_meta = load_json(str(data_root / 'transforms.json'))
-ray_chunk_size = 4096
+ray_chunk_size = 1024
 data_dict = fetch_img(data_root, transform_meta, if_fix=False)
 
 # directions = data_dict['directions']
@@ -276,9 +276,12 @@ def get_photo_loss(result_dict: dict(), target_dict: dict()):
 
         rgb_target = target_dict['rgb']
 
-        photo_loss_c = img2mse_weighted(rgb_c, rgb_target, seg_c)
-        photo_loss_f = img2mse_weighted(rgb_f, rgb_target, seg_f)
+        # photo_loss_c = img2mse_weighted(rgb_c, rgb_target, seg_c)
+        # photo_loss_f = img2mse_weighted(rgb_f, rgb_target, seg_f)
         
+        photo_loss_c = img2mse(rgb_c, rgb_target)
+        photo_loss_f = img2mse(rgb_f, rgb_target)
+
         ret_part_dict = {
             'photo_c': photo_loss_c,
             'photo_f': photo_loss_f
@@ -313,8 +316,8 @@ def get_mask_loss(result_dict: dict(), target_dict: dict()):
         'loss_mask_f': loss_mask_f
     }
     return ret_dict
-    
-def get_mask_loss_multiclass(result_dict:dict(), target_dict: dict(), criterion=nn.CrossEntropyLoss()):
+
+def get_mask_loss_multiclass(result_dict:dict(), target_dict: dict(), criterion=nn.CrossEntropyLoss(reduce=True, reduction='mean')):
     '''
     check notion note for detailed explanation
     '''
@@ -367,8 +370,8 @@ def get_photo_loss_multiclass(result_dict:dict(), target_dict: dict()):
         fine_dict = result['level_1']
         rgb_c = coarse_dict['rgb']
         rgb_f = fine_dict['rgb']
-        seg_c = coarse_dict['comp_seg']
-        seg_f = fine_dict['comp_seg']
+        seg_c = F.softmax(coarse_dict['comp_seg'], dim=-1)
+        seg_f = F.softmax(fine_dict['comp_seg'], dim=-1)
         prob_c = seg_c[:, int_part: int_part+1]
         prob_f = seg_f[:, int_part: int_part+1]
         loss_c = img2mse_weighted(rgb_c, rgb_target, prob_c)
@@ -406,7 +409,10 @@ def get_mask_total_loss(mask_dict):
 # %%
 from tqdm import tqdm
 optimize_step = 200
+pbar = tqdm(total=optimize_step, dynamic_ncols=True)
 for training_step in range(optimize_step):
+
+
     optimizer.zero_grad()
     data_dict = fetch_img(data_root, transform_meta)
 
@@ -447,17 +453,22 @@ for training_step in range(optimize_step):
         mask_dict = get_mask_loss(result_dict, target_dict)
         photo_loss = get_photo_loss_total(photo_dict) 
         mask_loss = get_mask_total_loss(mask_dict)
-        total_loss = photo_loss + mask_loss
+        # total_loss = photo_loss + mask_loss
+        total_loss = photo_loss
     else:
         mask_loss_dict = get_mask_loss_multiclass(result_dict, target_dict)
         photo_loss_dict = get_photo_loss_multiclass(result_dict, target_dict)
         mask_loss = mask_loss_dict['total_loss']
         photo_loss = photo_loss_dict['total_loss']
-        total_loss = mask_loss + photo_loss
-    if training_step % 10 == 0:
-        print('Results at step %d: mask loss: %.5E, photo loss: %.5E, total loss: %.5E' %(training_step, mask_loss.item(), photo_loss.item(), total_loss.item()))
+        # total_loss = mask_loss# +  1e-4 * photo_loss
+        total_loss = photo_loss
+    # if training_step % 10 == 0:
+    #     print('Results at step %d: mask loss: %.5E, photo loss: %.5E, total loss: %.5E' %(training_step, mask_loss.item(), photo_loss.item(), total_loss.item()))
+
     total_loss.backward()
     optimizer.step()
+    pbar.set_postfix({"Step": training_step, "Mask": f"{mask_loss.item():.5E}", "Photo": f"{photo_loss.item():.5E}", "Total": f"{total_loss.item():.5E}"}, refresh=True)
+    pbar.update()
 
 # release vram
 torch.cuda.empty_cache()
@@ -542,9 +553,6 @@ plt.imshow(img_part_1)
 # %%
 gt = data_dict['rgb'].view([h, w, 3]).cpu().numpy()
 plt.imshow(gt)
-
-
-# %%
 
 
 
