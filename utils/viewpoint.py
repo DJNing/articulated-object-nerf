@@ -20,6 +20,11 @@ def convert_ori_dir(origin, direction):
     dirs, ori = np.dot(conversion_matrix_axis, direction), np.dot(conversion_matrix_axis, origin)
     return ori, dirs
 
+def convert_ori_torch(origin):
+    cma_torch = torch.Tensor(conversion_matrix_axis).to(origin)
+    ori = torch.matmul(cma_torch, origin)
+    return ori
+
 def change_apply_change_basis(A, T, P):
     """
     Perform change of basis, apply transformation, and change back to the original basis.
@@ -33,11 +38,14 @@ def change_apply_change_basis(A, T, P):
     numpy.ndarray: The resulting matrix after the entire process, expressed in the B1 basis.
     """
     # Step 1: Change A to the B2 basis
-    A_B2 = np.linalg.inv(P).dot(A).dot(P)
-    
+    # print('P\n', P)
+    t = np.linalg.inv(P).dot(A)
+    # print('t\n', t)
+    A_B2 = t.dot(P)
+    # print('A_B2\n', A_B2)
     # Step 2: Apply the transformation T in the B2 basis
     A_B2_transformed = T.dot(A_B2)
-    
+    # print('A_B2_transformed\n', A_B2_transformed)
     # Step 3: Change A_B2_transformed back to the original B1 basis
     A_B1_transformed = P.dot(A_B2_transformed).dot(np.linalg.inv(P))
     
@@ -56,10 +64,14 @@ def change_apply_change_basis_torch(A, T, P):
     torch.Tensor: The resulting matrix after the entire process, expressed in the B1 basis.
     """
     # Step 1: Change A to the B2 basis
-    A_B2 = torch.matmul(torch.matmul(torch.inverse(P), A), P)
+    # print('P\n', P)
+    t = torch.matmul(torch.inverse(P), A)
+    # print('t\n', t)
+    A_B2 = torch.matmul(t, P)
+    # print('A_B2\n', A_B2)
     # Step 2: Apply the transformation T in the B2 basis
     A_B2_transformed = torch.matmul(T, A_B2)
-    
+    # print('A_B2_transformed\n', A_B2_transformed)
     # Step 3: Change A_B2_transformed back to the original B1 basis
     A_B1_transformed = torch.matmul(torch.matmul(P, A_B2_transformed), torch.inverse(P))
     
@@ -86,6 +98,7 @@ def get_local_art_GT(axis_pos, axis_dir, angles, is_degree=True):
     translation_matrix = np.eye(4)
     translation_matrix[:3, 3] = ori
     pose = sapien.Pose.from_transformation_matrix(rotation_matrix)
+    print(pose)
     return ori, dirs, pose
 
 def calculate_E2(E1, axis_position, axis_direction, angle_degrees):
@@ -147,6 +160,10 @@ def degrees_to_radians(degrees):
     radians = degrees * (math.pi / 180)
     return radians
 
+def radians_to_degree(rad):
+    degrees = rad / math.pi * 180
+    return degrees
+
 def pose2view(pose):
     '''
     pose: 4x4 matrix
@@ -200,11 +217,11 @@ def pose2view_torch(pose):
         [0, 1, 0]
     ], dtype=torch.float32).to(pose)
     
-    sign_conversion = torch.tensor([
-        [1, -1, -1],
-        [-1, -1, 1],
-        [1, 1, 1]
-    ], dtype=torch.float32).to(pose)
+    # sign_conversion = torch.tensor([
+    #     [1, -1, -1],
+    #     [-1, -1, 1],
+    #     [1, 1, 1]
+    # ], dtype=torch.float32).to(pose)
 
     R = pose[:3, :3]
     view_R = torch.matmul(R, column_swap)
@@ -223,11 +240,11 @@ def view2pose_torch(view):
         [0, 0, 1],
         [-1, 0, 0]
     ]).to(view)
-    sign_conversion = torch.Tensor([
-        [1, -1, -1],
-        [-1, -1, 1],
-        [1, 1, 1]
-    ]).to(view)
+    # sign_conversion = torch.Tensor([
+    #     [1, -1, -1],
+    #     [-1, -1, 1],
+    #     [1, 1, 1]
+    # ]).to(view)
     
     # Extract the rotation matrix R from the view matrix and apply sign conversion
     R = view[:3, :3]
@@ -244,3 +261,52 @@ def view2pose_torch(view):
     
     return pose
 
+def pose2view_torch_batch(pose):
+    """
+    Convert a batch of 4x4 pose matrices to 4x4 view matrices with differentiable operations.
+
+    Args:
+    pose (torch.Tensor): Bx4x4 pose matrices.
+
+    Returns:
+    torch.Tensor: Bx4x4 view matrices.
+    """
+    B = pose.shape[0]  # Get the batch size
+    column_swap = torch.tensor([
+        [0, 0, -1],
+        [-1, 0, 0],
+        [0, 1, 0]
+    ], dtype=torch.float32).to(pose).repeat(B, 1, 1)  # Repeat for each item in the batch
+
+    R = pose[:, :3, :3]
+    view_R = torch.matmul(R, column_swap)
+    view = torch.eye(4, dtype=torch.float32).to(pose).repeat(B, 1, 1)  # Repeat for each item in the batch
+    view[:, :3, :3] = view_R
+    view[:, :3, -1] = pose[:, :3, -1]
+
+    return view
+
+def view2pose_torch_batch(view):
+    '''
+    Convert a batch of 4x4 view matrices to 4x4 pose matrices with differentiable operations.
+
+    Args:
+    view (torch.Tensor): Bx4x4 view matrices.
+
+    Returns:
+    torch.Tensor: Bx4x4 pose matrices.
+    '''
+    B = view.shape[0]  # Get the batch size
+    column_swap = torch.Tensor([
+        [0, -1, 0],
+        [0, 0, 1],
+        [-1, 0, 0]
+    ]).to(view).repeat(B, 1, 1)  # Repeat for each item in the batch
+
+    R = view[:, :3, :3]
+    pose_R = torch.matmul(R, column_swap)
+    pose = torch.eye(4).to(view).repeat(B, 1, 1)  # Repeat for each item in the batch
+    pose[:, :3, :3] = pose_R
+    pose[:, :3, -1] = view[:, :3, -1]
+
+    return pose

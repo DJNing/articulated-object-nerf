@@ -261,7 +261,7 @@ def filter_seg_from_acc(seg, acc):
     
     return result
 
-def volumetric_seg_rendering(rgb, density, t_vals, dirs, white_bkgd, seg, nocs=None, mode='v2'):
+def volumetric_seg_rendering(rgb, density, t_vals, dirs, white_bkgd, seg, nocs=None):
     eps = 1e-10
 
     dists = torch.cat(
@@ -272,30 +272,94 @@ def volumetric_seg_rendering(rgb, density, t_vals, dirs, white_bkgd, seg, nocs=N
         dim=-1,
     )
     dists = dists * torch.norm(dirs[..., None, :], dim=-1)
-    alpha = 1.0 - torch.exp(-density[..., 0] * dists)
-    accum_prod = torch.cat(
+    def get_weights(density, dists, eps=1e-10):
+        alpha = 1.0 - torch.exp(-density[..., 0] * dists)
+        accum_prod = torch.cat(
+            [
+                torch.ones_like(alpha[..., :1]),
+                torch.cumprod(1.0 - alpha[..., :-1] + eps, dim=-1),
+            ],
+            dim=-1,
+        )
+
+        weights = alpha * accum_prod
+        return weights
+    
+    weights = get_weights(density, dists, eps=eps)
+    seg_weights = get_weights(seg, dists, eps=eps)
+
+    comp_rgb = (weights[..., None] * rgb).sum(dim=-2)
+
+    comp_rgb_seg = (weights[..., None] * seg_weights[..., None] * rgb).sum(dim=-2)
+
+    if torch.isnan(comp_rgb).any():
+        print('nan in rgb')
+
+    depth = (weights * t_vals).sum(dim=-1)
+
+    depth = torch.nan_to_num(depth, float("inf"))
+    depth = torch.clamp(depth, torch.min(depth), torch.max(depth))
+
+    acc = weights.sum(dim=-1)
+    opacity = (weights * seg_weights).sum(dim=-1)
+    inv_eps = 1 / eps
+
+    if white_bkgd:
+        comp_rgb = comp_rgb + (1.0 - acc[..., None])
+
+    if nocs is not None:
+        comp_nocs = (weights[..., None] * nocs).sum(dim=-2)
+        # return comp_rgb, acc, weights, comp_nocs
+    else:
+        # return comp_rgb, acc, weights, depth
+        comp_nocs = None
+
+
+    ret_dict = {
+        'comp_rgb': comp_rgb,
+        'comp_rgb_seg': comp_rgb_seg,
+        'acc': acc,
+        'weights': weights,
+        'depth': depth,
+        'comp_nocs': comp_nocs,
+        'comp_seg':seg_weights.sum(dim=-1),
+        'opacity': opacity,
+    }
+    return ret_dict
+
+def volumetric_rendering_seg_mask(rgb, density, t_vals, dirs, white_bkgd, seg, nocs=None):
+    '''
+    seg: pre-select the correponding idx before feeding in
+    '''
+    eps = 1e-10
+
+    dists = torch.cat(
         [
-            torch.ones_like(alpha[..., :1]),
-            torch.cumprod(1.0 - alpha[..., :-1] + eps, dim=-1),
+            t_vals[..., 1:] - t_vals[..., :-1],
+            torch.ones(t_vals[..., :1].shape, device=t_vals.device) * 1e10,
         ],
         dim=-1,
     )
+    dists = dists * torch.norm(dirs[..., None, :], dim=-1)
+    def get_weights(density, dists, eps=1e-10):
+        alpha = 1.0 - torch.exp(-density[..., 0] * dists)
+        accum_prod = torch.cat(
+            [
+                torch.ones_like(alpha[..., :1]),
+                torch.cumprod(1.0 - alpha[..., :-1] + eps, dim=-1),
+            ],
+            dim=-1,
+        )
 
-    weights = alpha * accum_prod
+        weights = alpha * accum_prod
+        return weights
+    
+    mask_density = density * seg
 
-    seg_rgb = seg * rgb
+    weights = get_weights(mask_density, dists, eps=eps)
 
-    comp_rgb = (weights[..., None] * seg_rgb).sum(dim=-2)
+    comp_rgb = (weights[..., None] * rgb).sum(dim=-2)
 
-    # if mode == 'v1' or mode=='v3':
-    comp_seg = (weights[..., None] * seg).sum(dim=-2)
-
-    # elif mode == 'v2':
-    #     seg_weights = weights[..., None]
-    #     seg_bg_weights = 1 - seg_weights
-    #     seg_fg_weights = seg_weights.repeat([1, 1, 2])
-    #     final_seg_weights = torch.cat((seg_bg_weights, seg_fg_weights), dim=-1)
-    #     comp_seg = (final_seg_weights * seg).sum(dim=-2)
 
     if torch.isnan(comp_rgb).any():
         print('nan in rgb')
@@ -321,13 +385,16 @@ def volumetric_seg_rendering(rgb, density, t_vals, dirs, white_bkgd, seg, nocs=N
 
     ret_dict = {
         'comp_rgb': comp_rgb,
+        'comp_rgb_seg': comp_rgb,
         'acc': acc,
         'weights': weights,
         'depth': depth,
         'comp_nocs': comp_nocs,
-        'comp_seg':comp_seg
+        'comp_seg':acc,
+        'opacity': acc,
     }
     return ret_dict
+
 
 def volumetric_rendering_with_seg(rgb, density, t_vals, dirs, white_bkgd, seg, nocs=None, mode='v2'):
     eps = 1e-10

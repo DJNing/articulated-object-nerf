@@ -216,6 +216,7 @@ def get_parser():
     parser.add_argument('--forward_chunk', type=int, default=16*240, help="chunk size for inference, distinguish from chunk parameter above")
     parser.add_argument('--seg_mode', type=str, default='v3', help="how to set the segmentation")
     parser.add_argument('--use_part_condition', type=bool, default=True, help="whether to use conditioned segmentation")
+    parser.add_argument('--use_seg_mask', type=bool, default=False, help="whether to use seg-mask rendering")
     return parser
 
 def get_opts():

@@ -1,0 +1,13 @@
+{
+    "dataset_name": "sapien_artseg",
+    "root_dir": "data/laptop_10211_art_seg",
+    "exp_name": "rgb_loss_perfect_init",
+    "exp_type": "nerf_artseg",
+    "img_wh": [640, 480],
+    "white_back": false,
+    "batch_size": 1024,
+    "num_gpus": 4,
+    "num_epochs": 10,
+    "output_path": "./results/nerf_artseg",
+    "nerf_ckpt": "results/laptop/nerf_laptop/last.ckpt"
+}

@@ -387,3 +387,139 @@ class SapienPartDataset(SapienDataset):
         }
 
         return ret_dict
+
+class SapienArtSegDataset(SapienDataset):
+
+    def __init__(self, root_dir, split='train', img_wh=(320, 240), model_type=None, white_back=None, eval_inference=None):
+        # super().__init__(root_dir, split, img_wh, model_type, white_back, eval_inference)
+        self.root_dir = root_dir
+        self.img_wh = img_wh
+        self.define_transforms()
+        self.white_back = False
+        self.num_img = None
+        self.num_art = None
+        
+        self.near = 2.0
+        self.far = 6.0
+        
+        self.split = split
+        # if split == 'train':
+        #     self.split = 'train'
+        # else:
+        #     self.split = 'test'
+
+        self.bounds = np.array([self.near, self.far])
+        self.meta_dict = self.read_meta()
+        
+        self.image_list = []
+        self.get_img_list()
+
+        self.dirs = []
+        self.c2w = []
+        self.rgb = []
+        self.mask = []
+        self.focal = None
+        w, h = img_wh
+        self.focal = self.meta_dict['focal']
+        self.directions = \
+            get_ray_directions(h, w, self.focal) # (h, w, 3)
+        if self.split == 'train':
+            # self.cache_data_fg_only()
+            self.cache_data()
+
+    def read_meta(self):
+        dataset_path = P(self.root_dir)
+        meta_dict = {}
+        cur_path = dataset_path / self.split
+        meta_dict = json.load(open(str(cur_path/'transforms.json')))
+        return meta_dict
+
+    def get_img_list(self):
+        dataset_path = P(self.root_dir)
+        cur_path = dataset_path / self.split
+        frames = self.meta_dict['frames']
+        for k, v in frames.items():
+            img_name = str(cur_path/'rgb'/(k+'.png'))
+            self.image_list += [img_name]
+        return
+
+    def cache_data(self):
+        dataset_path = P(self.root_dir)
+        cur_path = dataset_path / self.split
+        frames = self.meta_dict['frames']
+        for k, v in frames.items():
+            img_name = str(cur_path/'rgb'/(k+'.png'))
+            img = self.transform(Image.open(img_name)).view(4, -1).permute(1, 0)
+            valid_mask = (img[:, -1]).view([-1, 1])
+            img = img[:, :3]*img[:, -1:] # use black background
+            self.c2w += [torch.Tensor(np.array(v)).unsqueeze(0)] * img.shape[0]
+            self.rgb += [img]
+            self.mask += [valid_mask]
+        
+        num_img = len(frames.keys())
+        self.dirs = [self.directions.view(-1, 3)] * num_img
+
+        self.dirs = torch.cat(self.dirs, dim=0)
+        self.c2w = torch.cat(self.c2w, dim=0)
+        self.rgb = torch.cat(self.rgb, dim=0)
+        self.mask = torch.cat(self.mask, dim=0)
+        return
+    
+    def cache_data_fg_only(self):
+        dataset_path = P(self.root_dir)
+        cur_path = dataset_path / self.split
+        frames = self.meta_dict['frames']
+        for k, v in frames.items():
+            img_name = str(cur_path/'rgb'/(k+'.png'))
+            img = self.transform(Image.open(img_name)).view(4, -1).permute(1, 0)
+            valid_mask = (img[:, -1])
+            img = img[:, :3]*img[:, -1:] # use black background
+            img = img[valid_mask == 1]
+            self.c2w += [torch.Tensor(np.array(v)).unsqueeze(0)] * img.shape[0]
+            self.rgb += [img]
+            self.mask += [valid_mask[valid_mask == 1]]
+            self.dirs += [self.directions.view(-1, 3)[valid_mask == 1]] 
+        
+
+        self.dirs = torch.cat(self.dirs, dim=0)
+        self.c2w = torch.cat(self.c2w, dim=0)
+        self.rgb = torch.cat(self.rgb, dim=0)
+        self.mask = torch.cat(self.mask, dim=0)
+        return
+
+    def __len__(self):
+        if self.split == 'train':
+            return len(self.rgb)
+        else:
+            return len(self.image_list)
+
+    def _get_train_item(self, idx):
+        ret_dict = {
+            'rgb': self.rgb[idx],
+            'dirs': self.dirs[idx],
+            'c2w': self.c2w[idx],
+            'mask': self.mask[idx]
+        }
+        return ret_dict
+
+    def _get_test_item(self, idx):
+        img = self.transform(Image.open(self.image_list[idx])).view(4, -1).permute(1, 0)
+        valid_mask = img[:, -1]
+        img = img[:, :3] * img[:, -1:]
+        img = img.view([-1, 3])
+        img_name = 'r_' + str(idx)
+        c2w = self.meta_dict['frames'][img_name]
+        c2w = torch.Tensor(np.array(c2w)).unsqueeze(0).repeat(img.shape[0], 1, 1)
+        ret_dict = {
+            'img': img,
+            'c2w': c2w,
+            'dirs': self.directions.view([-1, 3]),
+            'valid_mask': valid_mask
+        }
+        return ret_dict
+
+    def __getitem__(self, idx):
+        if self.split == 'train':
+            return self._get_train_item(idx)
+        else:
+            return self._get_test_item(idx)

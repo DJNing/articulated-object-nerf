@@ -96,7 +96,9 @@ def main(args):
         for split in splits:
             generate_img_with_pose(args.render_pose_path, split, camera, asset, scene, object_path=output_path)
     elif args.art_seg_data:
-        gen_articulated_object_nerf_s2(10, 4, 'train', camera, asset, scene, object_path=output_path, \
+        gen_articulated_object_nerf_s2(30, 4, 'train', camera, asset, scene, object_path=output_path, \
+                                       render_pose_file_dir=args.save_render_pose_path)
+        gen_articulated_object_nerf_s2(10, 4, 'val', camera, asset, scene, object_path=output_path, \
                                        render_pose_file_dir=args.save_render_pose_path)
         generate_articulation_test(50, 4, 'test', camera, asset, scene, object_path=output_path, \
                                    render_pose_file_dir=args.save_render_pose_path)

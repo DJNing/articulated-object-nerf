@@ -17,7 +17,7 @@ from models.vanilla_nerf.model import LitNeRF
 from models.vanilla_nerf.model_ae_art import LitNeRF_AE_ART
 from models.vanilla_nerf.model_autodecoder import LitNeRF_AutoDecoder
 # from models.vanilla_nerf.model_part_seg import LitNeRFSeg
-from models.vanilla_nerf.model_nerfseg import LitNeRFSeg_v2
+from models.vanilla_nerf.model_nerfseg import LitNeRFSeg_v2, LitNeRFSegArt
 
 def main(hparams):
     if hparams.exp_type == "vanilla":
@@ -36,6 +36,10 @@ def main(hparams):
         )  # Needs to modify this to train for 3 test images
     elif hparams.exp_type == "nerf_seg":
         system = LitNeRFSeg_v2(
+            hparams=hparams
+        )
+    elif hparams.exp_type == "nerf_artseg":
+        system = LitNeRFSegArt(
             hparams=hparams
         )
     result_path = P(hparams.output_path) / hparams.exp_name
