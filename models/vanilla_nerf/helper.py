@@ -327,7 +327,7 @@ def volumetric_seg_rendering(rgb, density, t_vals, dirs, white_bkgd, seg, nocs=N
     }
     return ret_dict
 
-def volumetric_rendering_seg_mask(rgb, density, t_vals, dirs, white_bkgd, seg, nocs=None):
+def volumetric_rendering_seg_mask(rgb, density, t_vals, dirs, white_bkgd, seg_mask, seg, nocs=None):
     '''
     seg: pre-select the correponding idx before feeding in
     '''
@@ -354,13 +354,13 @@ def volumetric_rendering_seg_mask(rgb, density, t_vals, dirs, white_bkgd, seg, n
         weights = alpha * accum_prod
         return weights
     
-    mask_density = density * seg
+    mask_density = density * seg_mask
 
     weights = get_weights(mask_density, dists, eps=eps)
 
     comp_rgb = (weights[..., None] * rgb).sum(dim=-2)
 
-
+    comp_seg = (weights[..., None] * seg).sum(dim=-2)
     if torch.isnan(comp_rgb).any():
         print('nan in rgb')
 
@@ -390,13 +390,13 @@ def volumetric_rendering_seg_mask(rgb, density, t_vals, dirs, white_bkgd, seg, n
         'weights': weights,
         'depth': depth,
         'comp_nocs': comp_nocs,
-        'comp_seg':acc,
+        'comp_seg':comp_seg,
         'opacity': acc,
     }
     return ret_dict
 
 
-def volumetric_rendering_with_seg(rgb, density, t_vals, dirs, white_bkgd, seg, nocs=None, mode='v2'):
+def volumetric_rendering_with_seg(rgb, density, t_vals, dirs, white_bkgd, seg, nocs=None):
     eps = 1e-10
 
     dists = torch.cat(
@@ -420,15 +420,7 @@ def volumetric_rendering_with_seg(rgb, density, t_vals, dirs, white_bkgd, seg, n
 
     comp_rgb = (weights[..., None] * rgb).sum(dim=-2)
 
-    if mode == 'v1' or mode=='v3':
-        comp_seg = (weights[..., None] * seg).sum(dim=-2)
-
-    elif mode == 'v2':
-        seg_weights = weights[..., None]
-        seg_bg_weights = 1 - seg_weights
-        seg_fg_weights = seg_weights.repeat([1, 1, 2])
-        final_seg_weights = torch.cat((seg_bg_weights, seg_fg_weights), dim=-1)
-        comp_seg = (final_seg_weights * seg).sum(dim=-2)
+    comp_seg = (weights[..., None] * seg).sum(dim=-2)
 
     if torch.isnan(comp_rgb).any():
         print('nan in rgb')

@@ -350,6 +350,11 @@ class NeRFSeg(nn.Module):
                     white_bkgd=white_bkgd,
                     seg=seg
                 )
+            elif self.hparams.render_seg:
+                helper.volumetric_rendering_with_seg(
+
+                )
+                pass
             else:
                 # select the right seg to feed in rendering
                 # get idx from part_code
@@ -362,7 +367,8 @@ class NeRFSeg(nn.Module):
                     t_vals,
                     rays['rays_d'],
                     white_bkgd=white_bkgd,
-                    seg=seg_mask
+                    seg_mask=seg_mask,
+                    seg=seg
                 )
 
             # save for sample_pdf function for fine mlp
@@ -1395,7 +1401,7 @@ class LitNeRFSegArt(LitModel):
         # self.log("train/opa_reg_loss", reg_loss, on_step=True, prog_bar=True, logger=True)
 
         # loss = loss0 + loss1 #+ opa_loss + 0.1*reg_loss
-        loss = loss0 + loss1 + opa_loss
+        loss = loss0 + loss1 #+ opa_loss
         self.log("train/loss", loss, on_step=True)
         return loss
 

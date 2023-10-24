@@ -93,7 +93,7 @@ def main(hparams):
 
     pbar = TQDMProgressBar(refresh_rate=1)
     callbacks = [ckpt_cb, pbar]
-    wandb_logger = WandbLogger()
+    wandb_logger = WandbLogger(name=hparams.exp_name)
 
     if hparams.finetune_lpips or hparams.is_optimize:
         if hparams.ckpt_path is not None:
