@@ -223,42 +223,45 @@ class NeRFSeg(nn.Module):
             self.seg_activation = nn.Softmax(dim=-1)
         self.coarse_mlp = NeRFMLPSeg(min_deg_point, max_deg_point, deg_view, use_part_condition=hparams.use_part_condition)
         self.fine_mlp = NeRFMLPSeg(min_deg_point, max_deg_point, deg_view, use_part_condition=hparams.use_part_condition)
+        if self.hparams.one_hot_activation:
+            self.one_hot_activation = OneHotActivation
+        else:
+            self.one_hot_activation = None
+    # def forward_img(self, batch, randomized, white_bkgd, near, far, skip_seg=False):
+    #     '''
+    #     Used during test time to render the whole image
+    #     '''
+    #     c2w = batch['c2w'].to(torch.float32)
+    #     rays_o, viewdirs, rays_d = get_rays_torch(batch['directions'], c2w[:3, :], output_view_dirs=True)
 
-    def forward_img(self, batch, randomized, white_bkgd, near, far, skip_seg=False):
-        '''
-        Used during test time to render the whole image
-        '''
-        c2w = batch['c2w'].to(torch.float32)
-        rays_o, viewdirs, rays_d = get_rays_torch(batch['directions'], c2w[:3, :], output_view_dirs=True)
+    #     # split it chunks for training to avoid oom
+    #     chunk_len = rays_o.shape[0] // self.hparams.chunk + 1
+    #     chunk_idxs = torch.arange(0, chunk_len) * self.hparams.chunk
+    #     chunk_idxs[-1] = rays_o.shape[0]
+    #     ret_list = []
+    #     for i in range(len(chunk_idxs) - 1):
+    #         mini_batch = {}
+    #         begin, end = chunk_idxs[i], chunk_idxs[i+1]
+    #         mini_batch['rays_o'] = rays_o[begin: end]
+    #         mini_batch['rays_d'] = rays_d[begin: end]
+    #         mini_batch['viewdirs'] = viewdirs[begin: end]
+    #         mini_ret = self.forward(mini_batch, randomized, white_bkgd, near, far)
 
-        # split it chunks for training to avoid oom
-        chunk_len = rays_o.shape[0] // self.hparams.chunk + 1
-        chunk_idxs = torch.arange(0, chunk_len) * self.hparams.chunk
-        chunk_idxs[-1] = rays_o.shape[0]
-        ret_list = []
-        for i in range(len(chunk_idxs) - 1):
-            mini_batch = {}
-            begin, end = chunk_idxs[i], chunk_idxs[i+1]
-            mini_batch['rays_o'] = rays_o[begin: end]
-            mini_batch['rays_d'] = rays_d[begin: end]
-            mini_batch['viewdirs'] = viewdirs[begin: end]
-            mini_ret = self.forward(mini_batch, randomized, white_bkgd, near, far)
+    #         ret_list += [mini_ret]
 
-            ret_list += [mini_ret]
+    #     # combine results
 
-        # combine results
+    #     combined_ret = {}
 
-        combined_ret = {}
+    #     # Iterate through the keys in the nested dictionary (e.g., 'level_0', 'level_1', etc.)
+    #     for level_key in ret_list[0].keys():
+    #         combined_ret[level_key] = {}
+    #         # Iterate through the mini-ret results for each level
+    #         for mini_ret in ret_list:
+    #             # Concatenate the values for each key from the mini-ret results
+    #             combined_ret[level_key].update({k: torch.cat([v[level_key][k] for v in ret_list], dim=0)})
 
-        # Iterate through the keys in the nested dictionary (e.g., 'level_0', 'level_1', etc.)
-        for level_key in ret_list[0].keys():
-            combined_ret[level_key] = {}
-            # Iterate through the mini-ret results for each level
-            for mini_ret in ret_list:
-                # Concatenate the values for each key from the mini-ret results
-                combined_ret[level_key].update({k: torch.cat([v[level_key][k] for v in ret_list], dim=0)})
-
-        return combined_ret
+    #     return combined_ret
 
     def forward_c2w(self, batch, randomized, white_bkgd, near, far):
         '''
@@ -334,6 +337,8 @@ class NeRFSeg(nn.Module):
             rgb = self.rgb_activation(raw_rgb)
             density = self.sigma_activation(raw_density)
             seg = self.seg_activation(raw_seg)
+            if self.one_hot_activation is not None:
+                seg = self.one_hot_activation(seg)
             # render_dict = helper.volumetric_rendering_with_seg(
             #     rgb, 
             #     density,
@@ -386,7 +391,8 @@ class NeRFSeg(nn.Module):
                 "depth": render_dict['depth'],
                 "comp_seg": render_dict['comp_seg'],
                 "density": density,
-                "opacity": render_dict['opacity']
+                "opacity": render_dict['opacity'],
+                "sample_seg": seg
             }
             ret['level_' + str(i_level)] = result
 
@@ -1164,9 +1170,9 @@ class LitNeRFSegArt(LitModel):
         self,
         hparams,
         lr_init: float = 1.0e-3,
-        lr_final: float = 5.0e-6,
+        lr_final: float = 5.0e-5,
         lr_delay_steps: int = 2500,
-        lr_delay_mult: float = 0.9,
+        lr_delay_mult: float = 0.01,
         randomized: bool = True,
     ):
         for name, value in vars().items():
@@ -1187,6 +1193,13 @@ class LitNeRFSegArt(LitModel):
         for _ in range(self.part_num - 1):
             self.art_list += [ArticulationEstimation(perfect_init=True)]
         
+        if self.hparams.one_hot_loss:
+            self.one_hot_loss = OneHotLoss()
+        else:
+            self.one_hot_loss = None
+
+
+
         pass
 
     def setup(self, stage: Optional[str] = None) -> None:
@@ -1391,6 +1404,10 @@ class LitNeRFSegArt(LitModel):
     
         self.log("train/psnr1", psnr1, on_step=True, prog_bar=True, logger=True)
         self.log("train/psnr0", psnr0, on_step=True, prog_bar=True, logger=True)
+
+        # one-hot loss
+
+
 
         # opacity loss
         # opa_target = batch['mask']
@@ -1699,3 +1716,36 @@ class LitNeRFSegArt(LitModel):
         
         return psnr
 
+class OneHotActivation(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, input):
+        ctx.save_for_backward(input)
+        output = (input > 0.5).to(input)
+        return output
+
+    @staticmethod
+    def backward(ctx, grad_output):
+        input, = ctx.saved_tensors
+        grad_input = grad_output.clone()
+        return grad_input
+
+OneHotActivation = OneHotActivation.apply
+    
+class OneHotLoss(nn.Module):
+    def __init__(self, classification_weight=1.0, regularization_weight=0.1):
+        super(OneHotLoss, self).__init__()
+        self.classification_weight = classification_weight
+        self.regularization_weight = regularization_weight
+
+    def forward(self, predictions, labels):
+        # Compute the standard cross-entropy loss for classification
+        classification_loss = nn.functional.cross_entropy(predictions, labels)
+
+        # Compute the regularization term to encourage one-hot vectors
+        one_hot_labels = torch.eye(predictions.shape[1])[labels]  # Convert labels to one-hot
+        regularization_loss = torch.mean((predictions - one_hot_labels)**2)
+
+        # Combine both losses with their respective weights
+        total_loss = classification_loss * self.classification_weight + regularization_loss * self.regularization_weight
+
+        return total_loss

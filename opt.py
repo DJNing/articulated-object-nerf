@@ -218,7 +218,10 @@ def get_parser():
     parser.add_argument('--use_part_condition', type=bool, default=True, help="whether to use conditioned segmentation")
     parser.add_argument('--use_seg_mask', type=bool, default=False, help="whether to use seg-mask rendering")
     parser.add_argument('--render_seg', type=bool, default=False, help="whether to render seg as color")
-    parser.add_argument('--record_hard_sample', type=bool, default=True, help="whether to render seg as color")
+    parser.add_argument('--record_hard_sample', type=bool, default=False, help="whether to render seg as color")
+    parser.add_argument('--one_hot_loss', type=bool, default=False, help="whether to use one-hot loss for sample classification")
+    parser.add_argument('--one_hot_activation', type=bool, default=False, help="whether to use one-hot activation for sample classification, pred[pred>0.5] = 1, pred[pred<=0.5] = 0")
+    parser.add_argument('--num_cpu', type=int, default=2, help="number of cpus to use")
     return parser
 
 def get_opts():
@@ -235,3 +238,4 @@ def get_opts():
         setattr(args, key, value)
         
     return args
+
