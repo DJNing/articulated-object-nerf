@@ -1,7 +1,7 @@
 {
     "dataset_name": "sapien_artseg",
     "root_dir": "data/laptop_10211_art_seg",
-    "exp_name": "rgb_loss_perfect_init_seg_mask_all_rays_10_imgs",
+    "exp_name": "rgb_loss_perfect_init_seg_mask_all_rays_10_imgs_samples_debug",
     "exp_type": "nerf_artseg",
     "img_wh": [640, 480],
     "white_back": false,

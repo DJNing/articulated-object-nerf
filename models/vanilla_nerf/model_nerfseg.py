@@ -1,6 +1,8 @@
 import os
 from random import random
 from typing import *
+
+from pytorch_lightning.utilities.types import EPOCH_OUTPUT
 from datasets import dataset_dict
 from torch.utils.data import DataLoader
 import numpy as np
@@ -1164,7 +1166,7 @@ class LitNeRFSegArt(LitModel):
         lr_init: float = 1.0e-3,
         lr_final: float = 5.0e-6,
         lr_delay_steps: int = 2500,
-        lr_delay_mult: float = 0.01,
+        lr_delay_mult: float = 0.9,
         randomized: bool = True,
     ):
         for name, value in vars().items():
@@ -1195,6 +1197,7 @@ class LitNeRFSegArt(LitModel):
             "img_wh": tuple(self.hparams.img_wh),
             "white_back": self.hparams.white_back,
             "model_type": "vailla_nerf",
+            "record_hard_sample": self.hparams.record_hard_sample,
         }
         kwargs_val = {
             "root_dir": self.hparams.root_dir,
@@ -1225,11 +1228,12 @@ class LitNeRFSegArt(LitModel):
             # self.criterion = nn.CrossEntropyLoss(reduction='mean')
             self.criterion = CalculateSegLoss(self.hparams.seg_mode)
             self.opacity_criterion = nn.BCELoss()
+
     def train_dataloader(self):
         return DataLoader(
             self.train_dataset,
             shuffle=True,
-            num_workers=2,
+            num_workers=4,
             batch_size=self.hparams.batch_size,
             pin_memory=True,
         )
@@ -1238,7 +1242,7 @@ class LitNeRFSegArt(LitModel):
         return DataLoader(
             self.val_dataset,
             shuffle=False,
-            num_workers=2,
+            num_workers=4,
             batch_size=1,  # validate one image (H*W rays) at a time
             pin_memory=True,
         )
@@ -1279,7 +1283,6 @@ class LitNeRFSegArt(LitModel):
 
         for pg in optimizer.param_groups:
             pg["lr"] = new_lr
-
         optimizer.step(closure=optimizer_closure)
 
     def configure_optimizers(self):
@@ -1369,6 +1372,19 @@ class LitNeRFSegArt(LitModel):
 
         loss0 = helper.img2mse(rgb_coarse, rgb_target)
         loss1 = helper.img2mse(rgb_fine, rgb_target)
+        if self.hparams.record_hard_sample:
+            if not self.train_dataset.use_sample_list:
+                loss0_dict = self._calculate_loss_and_record_sample(rgb_coarse, rgb_target, batch['idx'])
+                loss1_dict = self._calculate_loss_and_record_sample(rgb_fine, rgb_target, batch['idx'])
+                loss0 = loss0_dict['loss']
+                loss1 = loss1_dict['loss']
+                sample_0 = loss0_dict['hard_samples']
+                sample_1 = loss1_dict['hard_samples']
+                samples = torch.cat((sample_0, sample_1)).unique()
+                self.train_dataset.sample_list += [samples]
+        else:
+            loss0 = helper.img2mse(rgb_coarse, rgb_target)
+            loss1 = helper.img2mse(rgb_fine, rgb_target)
 
         psnr0 = helper.mse2psnr(loss0)
         psnr1 = helper.mse2psnr(loss1)
@@ -1381,7 +1397,7 @@ class LitNeRFSegArt(LitModel):
 
         # opa_coarse = rendered_results['level_0']['opacity'].view([-1, ray_num]).permute(1, 0)
         # opa_fine = rendered_results['level_1']['opacity'].view([-1, ray_num]).permute(1, 0)
-        # # [ray_num, part_num]
+        # # # [ray_num, part_num]
         # max_opa_c, _ = torch.max(opa_coarse, dim=0)
         # max_opa_f, _ = torch.max(opa_fine, dim=0)
         
@@ -1389,6 +1405,11 @@ class LitNeRFSegArt(LitModel):
         # opa_loss_f = (max_opa_f - opa_target)**2
         # opa_loss = 0.5 * (opa_loss_c.mean() + opa_loss_f.mean())
         # self.log("train/opa_loss", opa_loss, on_step=True, prog_bar=True, logger=True)
+        opts = self.optimizers()
+        for pg in opts.param_groups:
+            lr = pg['lr']
+
+        self.log('train/lr', lr, on_step=True, prog_bar=True, logger=True)
         # opacity reguralization
         # opa_sum_c = opa_coarse.sum(dim=0) + 1e-10
         # opa_sum_f = opa_fine.sum(dim=0) + 1e-10
@@ -1404,6 +1425,31 @@ class LitNeRFSegArt(LitModel):
         loss = loss0 + loss1 #+ opa_loss
         self.log("train/loss", loss, on_step=True)
         return loss
+
+    def training_epoch_end(self, outputs: EPOCH_OUTPUT) -> None:
+        if self.hparams.record_hard_sample:
+            if self.train_dataset.use_sample_list:
+                # reset
+                self.train_dataset.sample_list = []
+            else:
+                temp_idx = torch.cat(self.train_dataset.sample_list)
+                self.train_dataset.sample_list = temp_idx.cpu().numpy().astype(int).tolist()
+            self.train_dataset.use_sample_list = not self.train_dataset.use_sample_list 
+        return super().training_epoch_end(outputs)
+
+    def _calculate_loss_and_record_sample(self, rgb, target, sample_idxs):
+        loss = (rgb - target) ** 2
+        mean_loss = loss.mean()
+
+        # save samples with loss larger than mean_loss
+        loss = loss.mean(dim=-1)
+        hard_samples = sample_idxs[loss > mean_loss]
+        ret_dict = {
+            'loss': mean_loss,
+            'hard_samples': hard_samples
+        }
+        return ret_dict
+
 
     def split_forward(self, input_dict):
         """

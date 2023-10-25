@@ -390,7 +390,9 @@ class SapienPartDataset(SapienDataset):
 
 class SapienArtSegDataset(SapienDataset):
 
-    def __init__(self, root_dir, split='train', img_wh=(320, 240), model_type=None, white_back=None, eval_inference=None):
+    def __init__(self, root_dir, split='train', img_wh=(320, 240), 
+                 model_type=None, white_back=None, eval_inference=None,
+                 record_hard_sample=False):
         # super().__init__(root_dir, split, img_wh, model_type, white_back, eval_inference)
         self.root_dir = root_dir
         self.img_wh = img_wh
@@ -398,7 +400,10 @@ class SapienArtSegDataset(SapienDataset):
         self.white_back = False
         self.num_img = None
         self.num_art = None
-        
+        self.record_hard_sample = record_hard_sample
+        if self.record_hard_sample:
+            self.sample_list = []
+        self.use_sample_list = False
         self.near = 2.0
         self.far = 6.0
         
@@ -489,16 +494,24 @@ class SapienArtSegDataset(SapienDataset):
 
     def __len__(self):
         if self.split == 'train':
-            return len(self.rgb)
+            if self.use_sample_list:
+                return len(self.sample_list)
+            else:
+                return len(self.rgb)
         else:
             return len(self.image_list)
 
     def _get_train_item(self, idx):
+        if self.use_sample_list:
+            sample_idx = self.sample_list[idx]
+        else:
+            sample_idx = idx
         ret_dict = {
-            'rgb': self.rgb[idx],
-            'dirs': self.dirs[idx],
-            'c2w': self.c2w[idx],
-            'mask': self.mask[idx]
+            'rgb': self.rgb[sample_idx],
+            'dirs': self.dirs[sample_idx],
+            'c2w': self.c2w[sample_idx],
+            'mask': self.mask[sample_idx],
+            'idx': sample_idx
         }
         return ret_dict
 

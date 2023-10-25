@@ -218,6 +218,7 @@ def get_parser():
     parser.add_argument('--use_part_condition', type=bool, default=True, help="whether to use conditioned segmentation")
     parser.add_argument('--use_seg_mask', type=bool, default=False, help="whether to use seg-mask rendering")
     parser.add_argument('--render_seg', type=bool, default=False, help="whether to render seg as color")
+    parser.add_argument('--record_hard_sample', type=bool, default=True, help="whether to render seg as color")
     return parser
 
 def get_opts():
