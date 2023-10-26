@@ -91,7 +91,8 @@ class NeRFMLPSeg(nn.Module):
         num_density_channels: int = 1,
         num_part: int = 2,
         use_res_seg: bool = True,
-        use_part_condition: bool = True
+        use_part_condition: bool = True,
+        res_raw: bool = False
     ):
         for name, value in vars().items():
             if name not in ["self", "__class__"]:
@@ -131,9 +132,14 @@ class NeRFMLPSeg(nn.Module):
         self.netwidth_condition = netwidth_condition 
         
         self.use_res_seg = use_res_seg
+        self.res_raw = res_raw
         if self.use_res_seg:
             # self.seg_layer = nn.Linear(netwidth_condition + pos_size, num_part + 1)
-            seg_in_dim = netwidth + pos_size
+            if self.res_raw:
+                # use raw position instead of encoded position
+                seg_in_dim = netwidth + 4
+            else:
+                seg_in_dim = netwidth + pos_size
         else:
             # self.seg_layer = nn.Linear(netwidth_condition, num_part+1)
             seg_in_dim = netwidth
@@ -151,7 +157,7 @@ class NeRFMLPSeg(nn.Module):
         init.xavier_uniform_(self.rgb_layer.weight)
         init.xavier_uniform_(self.seg_layer.weight)
 
-    def forward(self, x, condition, part_code):
+    def forward(self, x, condition, part_code, pos_raw):
         num_samples, feat_dim = x.shape[1:]
         x = x.reshape(-1, feat_dim)
         inputs = x
@@ -166,7 +172,10 @@ class NeRFMLPSeg(nn.Module):
         )
 
         if self.use_res_seg:
-            seg_input = torch.cat((x, inputs), dim=-1)
+            if self.res_raw:
+                seg_input = torch.cat((x, pos_raw), dim=-1)
+            else:
+                seg_input = torch.cat((x, inputs), dim=-1)
         else:
             seg_input = x
 
@@ -221,8 +230,12 @@ class NeRFSeg(nn.Module):
             self.seg_activation = self.sigma_activation
         else:
             self.seg_activation = nn.Softmax(dim=-1)
-        self.coarse_mlp = NeRFMLPSeg(min_deg_point, max_deg_point, deg_view, use_part_condition=hparams.use_part_condition)
-        self.fine_mlp = NeRFMLPSeg(min_deg_point, max_deg_point, deg_view, use_part_condition=hparams.use_part_condition)
+        self.coarse_mlp = NeRFMLPSeg(min_deg_point, max_deg_point, \
+                                     deg_view, use_part_condition=hparams.use_part_condition,
+                                   res_raw=self.hparams.res_raw)
+        self.fine_mlp = NeRFMLPSeg(min_deg_point, max_deg_point, \
+                                   deg_view, use_part_condition=hparams.use_part_condition,
+                                   res_raw=self.hparams.res_raw)
         if self.hparams.one_hot_activation:
             self.one_hot_activation = OneHotActivation
         else:
@@ -323,9 +336,22 @@ class NeRFSeg(nn.Module):
             part_code = part_code.unsqueeze(1).repeat(1, samples_enc.shape[1], 1)
             part_code = part_code.view([-1, part_num])
             if self.hparams.use_part_condition:
-                mlp_ret_dict = mlp(samples_enc, viewdirs_enc, part_code)
+                forward_dict = {
+                    "x":samples_enc,
+                    "condition":viewdirs_enc,
+                    "part_code":part_code,
+                    "pos_raw":samples
+                }
+                
             else:
-                mlp_ret_dict = mlp(samples_enc, viewdirs_enc, None)
+                forward_dict = {
+                    "x":samples_enc,
+                    "condition":viewdirs_enc,
+                    "part_code":None,
+                    "pos_raw":samples
+                }
+
+            mlp_ret_dict = mlp(**forward_dict)
             raw_rgb = mlp_ret_dict['raw_rgb']
             raw_density = mlp_ret_dict['raw_density']
             

@@ -222,6 +222,7 @@ def get_parser():
     parser.add_argument('--one_hot_loss', type=bool, default=False, help="whether to use one-hot loss for sample classification")
     parser.add_argument('--one_hot_activation', type=bool, default=False, help="whether to use one-hot activation for sample classification, pred[pred>0.5] = 1, pred[pred<=0.5] = 0")
     parser.add_argument('--num_cpu', type=int, default=2, help="number of cpus to use")
+    parser.add_argument('--res_raw', type=bool, default=False, help="whether to concatenate raw positions to segmentation head")
     return parser
 
 def get_opts():
