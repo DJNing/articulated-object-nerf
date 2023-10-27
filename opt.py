@@ -225,6 +225,8 @@ def get_parser():
     parser.add_argument('--res_raw', type=bool, default=False, help="whether to concatenate raw positions to segmentation head")
     parser.add_argument('--include_bg', type=bool, default=True, help="whether to include background during segmentation")
     parser.add_argument('--lr_final', type=float, default=1e-5, help="mininum learning rate during training")
+    parser.add_argument('--use_opa_loss', type=bool, default=False, help="whether to use opacity loss")
+    parser.add_argument('--use_seg_module', type=bool, default=False, help="whether to use segmentation module")
     return parser
 
 def get_opts():
