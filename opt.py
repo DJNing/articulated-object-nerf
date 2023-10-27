@@ -223,6 +223,8 @@ def get_parser():
     parser.add_argument('--one_hot_activation', type=bool, default=False, help="whether to use one-hot activation for sample classification, pred[pred>0.5] = 1, pred[pred<=0.5] = 0")
     parser.add_argument('--num_cpu', type=int, default=2, help="number of cpus to use")
     parser.add_argument('--res_raw', type=bool, default=False, help="whether to concatenate raw positions to segmentation head")
+    parser.add_argument('--include_bg', type=bool, default=True, help="whether to include background during segmentation")
+    parser.add_argument('--lr_final', type=float, default=1e-5, help="mininum learning rate during training")
     return parser
 
 def get_opts():

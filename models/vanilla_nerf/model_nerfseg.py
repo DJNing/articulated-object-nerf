@@ -92,7 +92,8 @@ class NeRFMLPSeg(nn.Module):
         num_part: int = 2,
         use_res_seg: bool = True,
         use_part_condition: bool = True,
-        res_raw: bool = False
+        res_raw: bool = False,
+        include_bg: bool = False
     ):
         for name, value in vars().items():
             if name not in ["self", "__class__"]:
@@ -137,7 +138,7 @@ class NeRFMLPSeg(nn.Module):
             # self.seg_layer = nn.Linear(netwidth_condition + pos_size, num_part + 1)
             if self.res_raw:
                 # use raw position instead of encoded position
-                seg_in_dim = netwidth + 4
+                seg_in_dim = netwidth + 3
             else:
                 seg_in_dim = netwidth + pos_size
         else:
@@ -148,7 +149,10 @@ class NeRFMLPSeg(nn.Module):
             seg_in_dim += num_part
             seg_out_dim = 1
         else:
-            seg_out_dim = num_part
+            if include_bg:
+                seg_out_dim = num_part + 1
+            else:
+                seg_out_dim = num_part
         self.seg_out_dim = seg_out_dim
         self.seg_layer = nn.Linear(seg_in_dim, seg_out_dim)
         self.num_part = num_part
@@ -173,7 +177,7 @@ class NeRFMLPSeg(nn.Module):
 
         if self.use_res_seg:
             if self.res_raw:
-                seg_input = torch.cat((x, pos_raw), dim=-1)
+                seg_input = torch.cat((x, pos_raw.reshape(-1, 3)), dim=-1)
             else:
                 seg_input = torch.cat((x, inputs), dim=-1)
         else:
@@ -203,6 +207,13 @@ class NeRFMLPSeg(nn.Module):
 
         return ret_dict
 
+class SegmentationModule(nn.Module):
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        pass
+
+    def forward(self, x):
+        pass
 
 class NeRFSeg(nn.Module):
     def __init__(
@@ -231,11 +242,13 @@ class NeRFSeg(nn.Module):
         else:
             self.seg_activation = nn.Softmax(dim=-1)
         self.coarse_mlp = NeRFMLPSeg(min_deg_point, max_deg_point, \
-                                     deg_view, use_part_condition=hparams.use_part_condition,
-                                   res_raw=self.hparams.res_raw)
+                                    deg_view, use_part_condition=hparams.use_part_condition,
+                                    res_raw=self.hparams.res_raw, \
+                                    include_bg=self.hparams.include_bg)
         self.fine_mlp = NeRFMLPSeg(min_deg_point, max_deg_point, \
-                                   deg_view, use_part_condition=hparams.use_part_condition,
-                                   res_raw=self.hparams.res_raw)
+                                    deg_view, use_part_condition=hparams.use_part_condition,
+                                    res_raw=self.hparams.res_raw, \
+                                    include_bg=self.hparams.include_bg)
         if self.hparams.one_hot_activation:
             self.one_hot_activation = OneHotActivation
         else:
@@ -1214,7 +1227,7 @@ class LitNeRFSegArt(LitModel):
             helper.load_state_dict_and_report(self, self.hparams.nerf_ckpt)
 
         self.part_num = self.hparams.part_num
-        
+        self.lr_final = self.hparams.lr_final
         self.art_list = []
         for _ in range(self.part_num - 1):
             self.art_list += [ArticulationEstimation(perfect_init=True)]
@@ -1364,8 +1377,12 @@ class LitNeRFSegArt(LitModel):
         part_code_list = []
         for i in range(self.part_num):
             # one_hot = F.one_hot(torch.Tensor(i+1).long(), self.part_num).reshape([1, -1]).repeat(ray_num, 1).to(c2w)
-            one_hot = torch.zeros(ray_num, self.part_num)
-            one_hot[:, i] = 1
+            if self.hparams.include_bg:
+                one_hot = torch.zeros(ray_num, self.part_num + 1)
+                one_hot[:, i+1] = 1
+            else:
+                one_hot = torch.zeros(ray_num, self.part_num)
+                one_hot[:, i] = 1
             one_hot = one_hot.to(c2w)
             part_code_list += [one_hot]
             if i == 0:
@@ -1431,23 +1448,19 @@ class LitNeRFSegArt(LitModel):
         self.log("train/psnr1", psnr1, on_step=True, prog_bar=True, logger=True)
         self.log("train/psnr0", psnr0, on_step=True, prog_bar=True, logger=True)
 
-        # one-hot loss
-
-
-
         # opacity loss
-        # opa_target = batch['mask']
+        opa_target = batch['mask']
 
-        # opa_coarse = rendered_results['level_0']['opacity'].view([-1, ray_num]).permute(1, 0)
-        # opa_fine = rendered_results['level_1']['opacity'].view([-1, ray_num]).permute(1, 0)
-        # # # [ray_num, part_num]
-        # max_opa_c, _ = torch.max(opa_coarse, dim=0)
-        # max_opa_f, _ = torch.max(opa_fine, dim=0)
+        opa_coarse = rendered_results['level_0']['opacity'].view([-1, ray_num]).permute(1, 0)
+        opa_fine = rendered_results['level_1']['opacity'].view([-1, ray_num]).permute(1, 0)
+        # # [ray_num, part_num]
+        max_opa_c, _ = torch.max(opa_coarse, dim=0)
+        max_opa_f, _ = torch.max(opa_fine, dim=0)
         
-        # opa_loss_c = (max_opa_c - opa_target)**2
-        # opa_loss_f = (max_opa_f - opa_target)**2
-        # opa_loss = 0.5 * (opa_loss_c.mean() + opa_loss_f.mean())
-        # self.log("train/opa_loss", opa_loss, on_step=True, prog_bar=True, logger=True)
+        opa_loss_c = (max_opa_c - opa_target)**2
+        opa_loss_f = (max_opa_f - opa_target)**2
+        opa_loss = 0.5 * (opa_loss_c.mean() + opa_loss_f.mean())
+        self.log("train/opa_loss", opa_loss, on_step=True, prog_bar=True, logger=True)
         opts = self.optimizers()
         for pg in opts.param_groups:
             lr = pg['lr']
@@ -1465,7 +1478,7 @@ class LitNeRFSegArt(LitModel):
         # self.log("train/opa_reg_loss", reg_loss, on_step=True, prog_bar=True, logger=True)
 
         # loss = loss0 + loss1 #+ opa_loss + 0.1*reg_loss
-        loss = loss0 + loss1 #+ opa_loss
+        loss = loss0 + loss1 + 0.1*opa_loss
         self.log("train/loss", loss, on_step=True)
         return loss
 
