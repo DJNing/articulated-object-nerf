@@ -157,10 +157,16 @@ class NeRFMLPSeg(nn.Module):
                 seg_out_dim = num_part
         self.seg_out_dim = seg_out_dim
 
+        self.final_seg_layer = None
         if hparams.use_seg_module:
             self.seg_layer = SegmentationModule(seg_in_dim, seg_out_dim, layer_num=1)
         else:
-            self.seg_layer = nn.Linear(seg_in_dim, seg_out_dim)
+            if self.hparam.use_late_pose:
+                self.seg_layer = nn.Linear(seg_in_dim, seg_out_dim+3)
+                self.final_seg_layer = nn.Linear(seg_out_dim+3, seg_out_dim)
+                init.xavier_uniform_(self.final_seg_layer.weight)
+            else:
+                self.seg_layer = nn.Linear(seg_in_dim, seg_out_dim)
             init.xavier_uniform_(self.seg_layer.weight)
 
 
@@ -196,7 +202,16 @@ class NeRFMLPSeg(nn.Module):
 
             if self.use_part_condition:
                 seg_input = torch.cat((seg_input, part_code), dim=-1)
-            raw_seg = self.seg_layer(seg_input).reshape(-1, num_samples, self.seg_out_dim)
+            # raw_seg = self.seg_layer(seg_input).reshape(-1, num_samples, self.seg_out_dim)
+            init_seg = self.seg_layer(seg_input)#.reshape(-1, num_samples, self.seg_out_dim)
+
+            if self.final_seg_layer is not None:
+                final_seg_ip = torch.cat(init_seg, pos_raw.reshape(-1, 3), dim=-1)
+                final_seg = self.final_seg_layer(final_seg_ip)
+
+                raw_seg = final_seg.reshape(-1, num_samples, self.seg_out_dim)
+            else:
+                raw_seg = init_seg.reshape(-1, num_samples, self.seg_out_dim)
 
         bottleneck = self.bottleneck_layer(x)
         condition_tile = torch.tile(condition[:, None, :], (1, num_samples, 1)).reshape(
@@ -217,15 +232,17 @@ class NeRFMLPSeg(nn.Module):
         }
 
         return ret_dict
+    
 class BasicBlock(nn.Module):
     def __init__(self, ip_dim) -> None:
         super().__init__()
         self.net = nn.Sequential(*[
                 nn.Conv1d(ip_dim, ip_dim, kernel_size=1, bias=False),
-                nn.BatchNorm1d(ip_dim),
+                # nn.BatchNorm1d(ip_dim),
                 nn.ReLU(),
                 nn.MaxPool1d(kernel_size=5, padding=2, stride=1)
             ])
+        init.xavier_uniform_(self.net[0].weight)
 
     def forward(self, x):
         return self.net(x)
@@ -245,7 +262,8 @@ class SegmentationModule(nn.Module):
             shared_mlps += [BasicBlock(ip_dim)]
         self.shared_mlps = nn.Sequential(*shared_mlps)
 
-        self.head = nn.Linear(ip_dim*2, op_dim)
+        self.head = nn.Linear(ip_dim, op_dim)
+        init.xavier_uniform_(self.head.weight)
 
     def forward(self, feat, pos):
         '''
@@ -266,8 +284,9 @@ class SegmentationModule(nn.Module):
             temp_result = self.shared_mlps[i](ip_list[i])
             ip_list += [temp_result]
 
-        head_ip_list = [ip_list[0], ip_list[-1]]
-        head_ip = torch.cat(head_ip_list, dim=1).permute(0, 1, 2).reshape([b*n, -1]) # [b x n, c]
+        # head_ip_list = [ip_list[0], ip_list[-1]]
+        head_ip = ip_list[0] + ip_list[-1]
+        head_ip = head_ip.permute(0, 1, 2).reshape([b*n, -1]) # [b x n, c]
         pred = self.head(head_ip)
         return pred
 
@@ -1522,6 +1541,14 @@ class LitNeRFSegArt(LitModel):
             self.log('train/lr', lr, on_step=True, prog_bar=True, logger=True)
             
             loss = loss0 + loss1 + 0.1*opa_loss
+
+        # smoothness loss
+
+        # density [ray_num, sample_num, 1] and raw_seg [ray_num, sample_num, part_num]
+        # pad raw_seg in a mirror manner
+        # 
+
+
         # opacity reguralization
         # opa_sum_c = opa_coarse.sum(dim=0) + 1e-10
         # opa_sum_f = opa_fine.sum(dim=0) + 1e-10
@@ -1536,6 +1563,21 @@ class LitNeRFSegArt(LitModel):
         # loss = loss0 + loss1 #+ opa_loss + 0.1*reg_loss
         else:
             loss = loss0 + loss1 #+ 0.1*opa_loss
+
+        if self.hparams.use_dist_reg:
+            density_c = rendered_results['level_0']['density']
+            density_f = rendered_results['level_1']['density']
+
+            raw_seg_c = rendered_results['level_0']['raw_seg']
+            raw_seg_f = rendered_results['level_1']['raw_seg']
+
+            dist_c = get_adjacency_dist(raw_seg_c)
+            dist_f = get_adjacency_dist(raw_seg_f)
+
+            mean_dist = 0.5*(density_c*dist_c).abs().mean() + 0.5*(density_f * dist_f).abs().mean()
+            self.log("train/dist_reg", mean_dist, on_step=True)
+            loss += 0.1*mean_dist
+        
         self.log("train/loss", loss, on_step=True)
         return loss
 
@@ -1845,3 +1887,19 @@ class OneHotLoss(nn.Module):
         total_loss = classification_loss * self.classification_weight + regularization_loss * self.regularization_weight
 
         return total_loss
+    
+def get_adjacency_dist(x: torch.Tensor):
+    
+    x_backward = torch.cat((x[:, 0:1, :], x[:, :-1, :]), dim=1)
+    x_forkward = torch.cat((x[:, 1:, :], x[:, -1:, :]), dim=1)
+
+    dist_forward = x - x_forkward
+
+    dist_backward = x_backward - x
+
+    avg_dist = dist_forward.abs().mean(dim=-1, keepdim=True) + dist_backward.abs().mean(dim=-1, keepdim=True)
+
+    return avg_dist
+
+def compose_img_by_depth(render_dict):
+    pass

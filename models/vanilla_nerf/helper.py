@@ -327,6 +327,7 @@ def volumetric_seg_rendering(rgb, density, t_vals, dirs, white_bkgd, seg, nocs=N
     }
     return ret_dict
 
+
 def volumetric_rendering_seg_mask(rgb, density, t_vals, dirs, white_bkgd, seg_mask, seg, nocs=None):
     '''
     seg: pre-select the correponding idx before feeding in
@@ -421,6 +422,9 @@ def volumetric_rendering_with_seg(rgb, density, t_vals, dirs, white_bkgd, seg, n
     comp_rgb = (weights[..., None] * rgb).sum(dim=-2)
 
     comp_seg = (weights[..., None] * seg).sum(dim=-2)
+
+    # mask rgb with rendered seg
+
 
     if torch.isnan(comp_rgb).any():
         print('nan in rgb')

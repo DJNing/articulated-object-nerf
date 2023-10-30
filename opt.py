@@ -227,6 +227,7 @@ def get_parser():
     parser.add_argument('--lr_final', type=float, default=1e-5, help="mininum learning rate during training")
     parser.add_argument('--use_opa_loss', type=bool, default=False, help="whether to use opacity loss")
     parser.add_argument('--use_seg_module', type=bool, default=False, help="whether to use segmentation module")
+    parser.add_argument('--use_late_pose', type=bool, default=False, help="whether to use pose after the initial segmentation")
     return parser
 
 def get_opts():
