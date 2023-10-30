@@ -158,7 +158,7 @@ class NeRFMLPSeg(nn.Module):
         self.seg_out_dim = seg_out_dim
 
         if hparams.use_seg_module:
-            self.seg_layer = SegmentationModule(seg_in_dim, seg_out_dim, layer_num=2)
+            self.seg_layer = SegmentationModule(seg_in_dim, seg_out_dim, layer_num=1)
         else:
             self.seg_layer = nn.Linear(seg_in_dim, seg_out_dim)
             init.xavier_uniform_(self.seg_layer.weight)
@@ -217,28 +217,33 @@ class NeRFMLPSeg(nn.Module):
         }
 
         return ret_dict
+class BasicBlock(nn.Module):
+    def __init__(self, ip_dim) -> None:
+        super().__init__()
+        self.net = nn.Sequential(*[
+                nn.Conv1d(ip_dim, ip_dim, kernel_size=1, bias=False),
+                nn.BatchNorm1d(ip_dim),
+                nn.ReLU(),
+                nn.MaxPool1d(kernel_size=5, padding=2, stride=1)
+            ])
 
+    def forward(self, x):
+        return self.net(x)
+    
 class SegmentationModule(nn.Module):
-    def __init__(self, ip_dim, op_dim, layer_num=2 ) -> None:
+    def __init__(self, ip_dim, op_dim, layer_num=1) -> None:
         super(SegmentationModule, self).__init__()
         self.ip_dim = ip_dim
         self.op_dim = op_dim
         self.layer_num = layer_num
         
-        self.pool = nn.MaxPool1d(3, padding=1)
-        self.act = nn.ReLU()
+        # self.pool = nn.MaxPool1d(3, padding=1)
+        # self.act = nn.ReLU()
 
         shared_mlps = []
         for i in range(self.layer_num):
-            shared_mlps.extend(
-                nn.Sequential(**[
-                nn.Conv1d(ip_dim, ip_dim, kernel_size=1, bias=False),
-                nn.BatchNorm1d(ip_dim),
-                nn.ReLU(),
-                nn.MaxPool1d(kernel_size=3, padding=1)
-            ])
-            )
-        self.shared_mlps = shared_mlps
+            shared_mlps += [BasicBlock(ip_dim)]
+        self.shared_mlps = nn.Sequential(*shared_mlps)
 
         self.head = nn.Linear(ip_dim*2, op_dim)
 
