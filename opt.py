@@ -228,6 +228,7 @@ def get_parser():
     parser.add_argument('--use_opa_loss', type=bool, default=False, help="whether to use opacity loss")
     parser.add_argument('--use_seg_module', type=bool, default=False, help="whether to use segmentation module")
     parser.add_argument('--use_late_pose', type=bool, default=False, help="whether to use pose after the initial segmentation")
+    parser.add_argument('--use_dist_reg', type=bool, default=False, help="whether to use local smoothness loss")
     return parser
 
 def get_opts():

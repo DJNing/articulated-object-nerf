@@ -1434,6 +1434,15 @@ class LitNeRFSegArt(LitModel):
             params=[seg_opt_dict], lr=self.lr_init, betas=(0.9, 0.999)
             )
 
+    def get_part_code(self, ray_num, i):
+        if self.hparams.include_bg:
+            one_hot = torch.zeros(ray_num, self.part_num + 1)
+            one_hot[:, i+1] = 1
+        else:
+            one_hot = torch.zeros(ray_num, self.part_num)
+            one_hot[:, i] = 1
+        return one_hot
+
     def training_step(self, batch, batch_idx):
 
         for k, v in batch.items():
@@ -1449,12 +1458,7 @@ class LitNeRFSegArt(LitModel):
         part_code_list = []
         for i in range(self.part_num):
             # one_hot = F.one_hot(torch.Tensor(i+1).long(), self.part_num).reshape([1, -1]).repeat(ray_num, 1).to(c2w)
-            if self.hparams.include_bg:
-                one_hot = torch.zeros(ray_num, self.part_num + 1)
-                one_hot[:, i+1] = 1
-            else:
-                one_hot = torch.zeros(ray_num, self.part_num)
-                one_hot[:, i] = 1
+            one_hot = self.get_part_code(ray_num, i)
             one_hot = one_hot.to(c2w)
             part_code_list += [one_hot]
             if i == 0:
@@ -1519,7 +1523,7 @@ class LitNeRFSegArt(LitModel):
     
         self.log("train/psnr1", psnr1, on_step=True, prog_bar=True, logger=True)
         self.log("train/psnr0", psnr0, on_step=True, prog_bar=True, logger=True)
-
+        loss = loss0 + loss1
         # opacity loss
         if self.hparams.use_opa_loss:
             opa_target = batch['mask']
@@ -1540,7 +1544,7 @@ class LitNeRFSegArt(LitModel):
 
             self.log('train/lr', lr, on_step=True, prog_bar=True, logger=True)
             
-            loss = loss0 + loss1 + 0.1*opa_loss
+            loss += 0.1*opa_loss
 
         # smoothness loss
 
@@ -1561,15 +1565,13 @@ class LitNeRFSegArt(LitModel):
         # self.log("train/opa_reg_loss", reg_loss, on_step=True, prog_bar=True, logger=True)
 
         # loss = loss0 + loss1 #+ opa_loss + 0.1*reg_loss
-        else:
-            loss = loss0 + loss1 #+ 0.1*opa_loss
 
         if self.hparams.use_dist_reg:
             density_c = rendered_results['level_0']['density']
             density_f = rendered_results['level_1']['density']
 
-            raw_seg_c = rendered_results['level_0']['raw_seg']
-            raw_seg_f = rendered_results['level_1']['raw_seg']
+            raw_seg_c = rendered_results['level_0']['sample_seg']
+            raw_seg_f = rendered_results['level_1']['sample_seg']
 
             dist_c = get_adjacency_dist(raw_seg_c)
             dist_f = get_adjacency_dist(raw_seg_f)
@@ -1577,6 +1579,18 @@ class LitNeRFSegArt(LitModel):
             mean_dist = 0.5*(density_c*dist_c).abs().mean() + 0.5*(density_f * dist_f).abs().mean()
             self.log("train/dist_reg", mean_dist, on_step=True)
             loss += 0.1*mean_dist
+
+
+        if self.hparams.include_bg:
+            # use regularization
+
+            seg_bg_c = rendered_results['level_0']['sample_seg'][:, :, 0]
+            seg_bg_f = rendered_results['level_1']['sample_seg'][:, :, 0]
+
+            bg_regularization = 1e-4 * (seg_bg_c.sum() + seg_bg_f.sum())
+
+            loss += bg_regularization
+            self.log("train/bg_regularize", bg_regularization, on_step=True)
         
         self.log("train/loss", loss, on_step=True)
         return loss
@@ -1681,8 +1695,9 @@ class LitNeRFSegArt(LitModel):
         opacity_list = []
         for part in range(self.part_num):
             # part_code = F.one_hot(torch.Tensor(part+1).long(), self.part_num).reshape([1, -1]).repeat(ray_num, 1).to(c2w)
-            part_code = torch.zeros([ray_num, self.part_num])
-            part_code[:, part] = 1
+            # part_code = torch.zeros([ray_num, self.part_num])
+            # part_code[:, part] = 1
+            part_code = self.get_part_code(ray_num, part)
             part_code = part_code.to(c2w)
 
             if part == 0:
