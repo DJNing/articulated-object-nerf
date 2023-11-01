@@ -1,7 +1,7 @@
 {
     "dataset_name": "sapien_artseg",
     "root_dir": "data/laptop_10211_art_seg",
-    "exp_name": "rgb_loss_perfect_init_one_hot_act_res_raw_hard_samples_bg_reg",
+    "exp_name": "rgb_loss_perfect_init_one_hot_act_res_raw_bg_reg",
     "exp_type": "nerf_artseg",
     "img_wh": [640, 480],
     "white_back": false,
@@ -12,7 +12,7 @@
     "nerf_ckpt": "results/laptop/nerf_laptop/last.ckpt",
     "use_seg_mask": false,
     "use_part_condition": false,
-    "record_hard_sample": true,
+    "record_hard_sample": false,
     "one_hot_loss": false,
     "one_hot_activation": true,
     "res_raw": true,

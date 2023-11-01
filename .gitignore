@@ -10,3 +10,5 @@ draft
 *cache
 .ipynb_checkpoints
 *.gif
+report
+image_composition*

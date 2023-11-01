@@ -327,6 +327,18 @@ def volumetric_seg_rendering(rgb, density, t_vals, dirs, white_bkgd, seg, nocs=N
     }
     return ret_dict
 
+def get_weights(density, dists, eps=1e-10):
+        alpha = 1.0 - torch.exp(-density[..., 0] * dists)
+        accum_prod = torch.cat(
+            [
+                torch.ones_like(alpha[..., :1]),
+                torch.cumprod(1.0 - alpha[..., :-1] + eps, dim=-1),
+            ],
+            dim=-1,
+        )
+
+        weights = alpha * accum_prod
+        return weights
 
 def volumetric_rendering_seg_mask(rgb, density, t_vals, dirs, white_bkgd, seg_mask, seg, nocs=None):
     '''
@@ -342,18 +354,7 @@ def volumetric_rendering_seg_mask(rgb, density, t_vals, dirs, white_bkgd, seg_ma
         dim=-1,
     )
     dists = dists * torch.norm(dirs[..., None, :], dim=-1)
-    def get_weights(density, dists, eps=1e-10):
-        alpha = 1.0 - torch.exp(-density[..., 0] * dists)
-        accum_prod = torch.cat(
-            [
-                torch.ones_like(alpha[..., :1]),
-                torch.cumprod(1.0 - alpha[..., :-1] + eps, dim=-1),
-            ],
-            dim=-1,
-        )
-
-        weights = alpha * accum_prod
-        return weights
+    
     
     mask_density = density * seg_mask
 

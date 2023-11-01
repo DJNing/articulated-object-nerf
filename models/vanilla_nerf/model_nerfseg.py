@@ -1587,7 +1587,13 @@ class LitNeRFSegArt(LitModel):
             seg_bg_c = rendered_results['level_0']['sample_seg'][:, :, 0]
             seg_bg_f = rendered_results['level_1']['sample_seg'][:, :, 0]
 
-            bg_regularization = 1e-4 * (seg_bg_c.sum() + seg_bg_f.sum())
+            density_c = rendered_results['level_0']['density'].reshape(seg_bg_c.shape)
+            density_f = rendered_results['level_1']['density'].reshape(seg_bg_f.shape)
+
+            sum_seg_c = (seg_bg_c * density_c).sum()
+            sum_seg_f = (seg_bg_f * density_f).sum()
+
+            bg_regularization = 1e-7 * (sum_seg_c + sum_seg_f)
 
             loss += bg_regularization
             self.log("train/bg_regularize", bg_regularization, on_step=True)
@@ -1646,7 +1652,7 @@ class LitNeRFSegArt(LitModel):
         rgb_seg_results = []
         opacity_results = []
         # comp_seg_results = []
-        # depth_results = []
+        depth_results = []
 
         # Split the data into minibatches
         for i in range(0, N, chunk_size):
@@ -1667,22 +1673,22 @@ class LitNeRFSegArt(LitModel):
             rgb_seg_results.append(minibatch_result["level_1"]["rgb_seg"])
             opacity_results.append(minibatch_result['level_1']['opacity'])
             # comp_seg_results.append(minibatch_result["level_1"]["comp_seg"])
-            # depth_results.append(minibatch_result["level_1"]["depth"])
+            depth_results.append(minibatch_result["level_1"]["depth"])
 
         # Concatenate results from all minibatches
         final_rgb = torch.cat(rgb_results, dim=0)
         final_rgb_seg = torch.cat(rgb_seg_results, dim=0)
         final_opa = torch.cat(opacity_results, dim=0)
         # final_comp_seg = torch.cat(comp_seg_results, dim=0)
-        # final_depth = torch.cat(depth_results, dim=0)
+        final_depth = torch.cat(depth_results, dim=0)
 
         # Return the gathered results as a dictionary
         gathered_results = {
             "rgb": final_rgb,
             "rgb_seg": final_rgb_seg,
-            "opacity": final_opa
+            "opacity": final_opa,
             # "comp_seg": final_comp_seg,
-            # "depth": final_depth
+            "depth": final_depth
         }
 
         return gathered_results
@@ -1693,6 +1699,7 @@ class LitNeRFSegArt(LitModel):
         part_img_list = []
         img_list = []
         opacity_list = []
+        depth_list = []
         for part in range(self.part_num):
             # part_code = F.one_hot(torch.Tensor(part+1).long(), self.part_num).reshape([1, -1]).repeat(ray_num, 1).to(c2w)
             # part_code = torch.zeros([ray_num, self.part_num])
@@ -1716,10 +1723,12 @@ class LitNeRFSegArt(LitModel):
             img_list += [render_dict['rgb'].unsqueeze(0)]
             part_img_list += [render_dict['rgb_seg'].unsqueeze(0)] # p * [1, N, 3]
             opacity_list += [render_dict['opacity'].unsqueeze(0)]
+            depth_list += [render_dict['depth'].unsqueeze(0)]
             ret_dict = {
                 'part_img': part_img_list,
                 'img': img_list,
-                'opacity': opacity_list
+                'opacity': opacity_list,
+                'depth': depth_list
             }
         return ret_dict
 
@@ -1746,7 +1755,9 @@ class LitNeRFSegArt(LitModel):
         ret_dict = self.render_img(batch)
         img_list = ret_dict["part_img"]
         opacity = ret_dict["opacity"]
-        final_img = torch.cat(img_list, dim=0).sum(dim=0).view([-1, 3])
+        depth = ret_dict["depth"]
+        final_img = compose_img_by_depth(img_list, depth).view([-1, 3])
+        # final_img = torch.cat(img_list, dim=0).sum(dim=0).view([-1, 3])
         rgb_target = batch['img']
         rgb_loss = helper.img2mse(final_img, rgb_target)
         psnr = helper.mse2psnr(rgb_loss)
@@ -1916,5 +1927,19 @@ def get_adjacency_dist(x: torch.Tensor):
 
     return avg_dist
 
-def compose_img_by_depth(render_dict):
-    pass
+def compose_img_by_depth(rgb_list, depth_list):
+    stacked_depths = torch.stack(depth_list, dim=0)
+    stacked_depths[stacked_depths == 0] = torch.inf
+    final_rgb = torch.zeros_like(rgb_list[0])
+    closest_depth_idx = torch.argmin(stacked_depths, dim=0)
+    for i in range(len(rgb_list)):
+        idx = closest_depth_idx == i
+        final_rgb[idx] = rgb_list[i][idx]
+
+        # save for offline processing
+        rgb_name = 'image_composition/rgb_' + str(i) + '.pt'
+        depth_name = 'image_composition/depth_' + str(i) + '.pt'
+        torch.save(rgb_list[i], rgb_name)
+        torch.save(depth_list[i], depth_name)
+
+    return final_rgb
