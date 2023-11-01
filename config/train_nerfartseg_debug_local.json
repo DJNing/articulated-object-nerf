@@ -1,11 +1,11 @@
 {
     "dataset_name": "sapien_artseg",
     "root_dir": "data/laptop_10211_art_seg",
-    "exp_name": "rgb_loss_perfect_init_one_hot_act_res_raw_bg_reg",
+    "exp_name": "rgb_loss_perfect_init_one_hot_act_res_raw_bg_smooth",
     "exp_type": "nerf_artseg",
     "img_wh": [640, 480],
     "white_back": false,
-    "batch_size": 2048,
+    "batch_size": 2560,
     "num_gpus": 1,
     "num_epochs": 20,
     "output_path": "./results/nerf_artseg",
@@ -19,5 +19,6 @@
     "include_bg": true,
     "lr_final": 1e-4,
     "use_seg_module": false,
-    "use_dist_reg": false
+    "use_dist_reg": true,
+    "use_bg_reg": false
 }

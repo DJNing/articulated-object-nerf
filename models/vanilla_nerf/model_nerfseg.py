@@ -1581,7 +1581,7 @@ class LitNeRFSegArt(LitModel):
             loss += 0.1*mean_dist
 
 
-        if self.hparams.include_bg:
+        if self.hparams.use_bg_reg:
             # use regularization
 
             seg_bg_c = rendered_results['level_0']['sample_seg'][:, :, 0]
@@ -1593,7 +1593,7 @@ class LitNeRFSegArt(LitModel):
             sum_seg_c = (seg_bg_c * density_c).sum()
             sum_seg_f = (seg_bg_f * density_f).sum()
 
-            bg_regularization = 1e-7 * (sum_seg_c + sum_seg_f)
+            bg_regularization = 1e-8 * (sum_seg_c + sum_seg_f)
 
             loss += bg_regularization
             self.log("train/bg_regularize", bg_regularization, on_step=True)
@@ -1757,6 +1757,7 @@ class LitNeRFSegArt(LitModel):
         opacity = ret_dict["opacity"]
         depth = ret_dict["depth"]
         final_img = compose_img_by_depth(img_list, depth).view([-1, 3])
+        torch.save(ret_dict, "image_composition/tensor_dict.pt")
         # final_img = torch.cat(img_list, dim=0).sum(dim=0).view([-1, 3])
         rgb_target = batch['img']
         rgb_loss = helper.img2mse(final_img, rgb_target)
