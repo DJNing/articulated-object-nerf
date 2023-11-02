@@ -340,6 +340,11 @@ def get_weights(density, dists, eps=1e-10):
         weights = alpha * accum_prod
         return weights
 
+def volumetric_composite_rendering(rgb, density, t_vals, dirs, white_bkgd, \
+                                   seg_mask, seg, nocs=None, mode='paris'):
+
+    pass
+
 def volumetric_rendering_seg_mask(rgb, density, t_vals, dirs, white_bkgd, seg_mask, seg, nocs=None):
     '''
     seg: pre-select the correponding idx before feeding in

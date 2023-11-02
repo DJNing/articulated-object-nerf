@@ -376,6 +376,89 @@ class NeRFSeg(nn.Module):
         render_dict = self.forward(rays, randomized, white_bkgd, near, far)
         return render_dict
 
+    def forward_no_rendering(self, rays, randomized, white_bkgd, near, far, seg_feat=False):
+        ret = {}
+        for i_level in range(self.num_levels):
+            if i_level == 0:
+                t_vals, samples = helper.sample_along_rays(
+                    rays_o=rays["rays_o"],
+                    rays_d=rays["rays_d"],
+                    num_samples=self.num_coarse_samples,
+                    near=near,
+                    far=far,
+                    randomized=randomized,
+                    lindisp=self.lindisp,
+                )
+                mlp = self.coarse_mlp
+                output_feat = False
+
+            else:
+                t_mids = 0.5 * (t_vals[..., 1:] + t_vals[..., :-1])
+                t_vals, samples = helper.sample_pdf(
+                    bins=t_mids,
+                    weights=ret['level_0']['weights'][..., 1:-1],
+                    origins=rays["rays_o"],
+                    directions=rays["rays_d"],
+                    t_vals=t_vals,
+                    num_samples=self.num_fine_samples,
+                    randomized=randomized,
+                )
+                mlp = self.fine_mlp
+                if seg_feat:
+                    output_feat = True
+
+            samples_enc = helper.pos_enc(
+                samples,
+                self.min_deg_point,
+                self.max_deg_point,
+            )
+            viewdirs_enc = helper.pos_enc(rays["viewdirs"], 0, self.deg_view)
+            part_code = rays.get('part_code', None)
+            
+            if part_code is None:
+                raise RuntimeError('part_code not found')
+            part_num = part_code.shape[-1]
+            part_code = part_code.unsqueeze(1).repeat(1, samples_enc.shape[1], 1)
+            part_code = part_code.view([-1, part_num])
+            if self.hparams.use_part_condition:
+                forward_dict = {
+                    "x":samples_enc,
+                    "condition":viewdirs_enc,
+                    "part_code":part_code,
+                    "pos_raw":samples
+                }
+                
+            else:
+                forward_dict = {
+                    "x":samples_enc,
+                    "condition":viewdirs_enc,
+                    "part_code":None,
+                    "pos_raw":samples
+                }
+
+            mlp_ret_dict = mlp(**forward_dict)
+            raw_rgb = mlp_ret_dict['raw_rgb']
+            raw_density = mlp_ret_dict['raw_density']
+            
+            raw_seg = mlp_ret_dict['raw_seg']
+
+            if self.noise_std > 0 and randomized:
+                raw_density = raw_density + torch.rand_like(raw_density) * self.noise_std
+
+            rgb = self.rgb_activation(raw_rgb)
+            density = self.sigma_activation(raw_density)
+            seg = self.seg_activation(raw_seg)
+            if self.one_hot_activation is not None:
+                seg = self.one_hot_activation(seg)
+            result = {
+                "rgb": rgb,
+                "density": density,
+                "seg": seg
+            }
+            ret['level_' + str(i_level)] = result
+
+        return ret
+
     def forward(self, rays, randomized, white_bkgd, near, far, seg_feat=False):
         ret = {}
         for i_level in range(self.num_levels):
@@ -473,6 +556,17 @@ class NeRFSeg(nn.Module):
 
                 )
                 pass
+            elif self.hparams.composite_rendering:
+                # reshape them [part_num, ray_num, sample_num, channel_num]
+                sample_num = samples.shape[1]
+                part_num = self.hparams.part_num
+                part_rgb = rgb.view(part_num, -1, sample_num, 3)
+                part_density = density.view(part_num, -1, sample_num, 1)
+                if self.hparams.include_bg:
+                    part_seg = seg.view(part_num, -1, sample_num, part_num + 1)    
+                else:
+                    part_seg = seg.view(part_num, -1, sample_num, part_num)
+                
             else:
                 # select the right seg to feed in rendering
                 # get idx from part_code
