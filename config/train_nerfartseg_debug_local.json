@@ -20,5 +20,6 @@
     "lr_final": 1e-4,
     "use_seg_module": false,
     "use_dist_reg": true,
-    "use_bg_reg": false
+    "use_bg_reg": false,
+    "composite_rendering": true
 }

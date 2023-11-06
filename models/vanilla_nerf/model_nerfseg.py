@@ -376,7 +376,7 @@ class NeRFSeg(nn.Module):
         render_dict = self.forward(rays, randomized, white_bkgd, near, far)
         return render_dict
 
-    def forward_no_rendering(self, rays, randomized, white_bkgd, near, far, seg_feat=False):
+    def forward_composite_rendering(self, rays, randomized, white_bkgd, near, far, seg_feat=False):
         ret = {}
         for i_level in range(self.num_levels):
             if i_level == 0:
@@ -450,6 +450,8 @@ class NeRFSeg(nn.Module):
             seg = self.seg_activation(raw_seg)
             if self.one_hot_activation is not None:
                 seg = self.one_hot_activation(seg)
+
+            
             result = {
                 "rgb": rgb,
                 "density": density,
@@ -562,11 +564,14 @@ class NeRFSeg(nn.Module):
                 part_num = self.hparams.part_num
                 part_rgb = rgb.view(part_num, -1, sample_num, 3)
                 part_density = density.view(part_num, -1, sample_num, 1)
+                # t_vals = t_vals.view(part_num, -1, sample_num)
                 if self.hparams.include_bg:
                     part_seg = seg.view(part_num, -1, sample_num, part_num + 1)    
                 else:
                     part_seg = seg.view(part_num, -1, sample_num, part_num)
-                
+                render_dict = helper.volumetric_composite_rendering(
+                    part_rgb, part_density, t_vals, rays['rays_d'], part_seg
+                )
             else:
                 # select the right seg to feed in rendering
                 # get idx from part_code
@@ -588,17 +593,26 @@ class NeRFSeg(nn.Module):
 
             # ret.append((comp_rgb, acc, depth, seg_result))
             # feat_out = mlp_ret_dict.get("feat", None)
-            result = {
-                "rgb": render_dict['comp_rgb'],
-                "rgb_seg": render_dict['comp_rgb_seg'],
-                "acc": render_dict['acc'],
-                "weights": render_dict['weights'],
-                "depth": render_dict['depth'],
-                "comp_seg": render_dict['comp_seg'],
-                "density": density,
-                "opacity": render_dict['opacity'],
-                "sample_seg": seg
-            }
+            if self.hparams.composite_rendering:
+                result = {
+                    "rgb": render_dict['comp_rgb'],
+                    "opacity": render_dict['opacity'],
+                    "depth": render_dict['depth'],
+                    "weights": render_dict['weights'],
+                    "density": density,
+                    "sample_seg": seg
+                }
+            else:
+                result = {
+                    "rgb": render_dict['comp_rgb'],
+                    "acc": render_dict['acc'],
+                    "weights": render_dict['weights'],
+                    "depth": render_dict['depth'],
+                    "comp_seg": render_dict['comp_seg'],
+                    "density": density,
+                    "opacity": render_dict['opacity'],
+                    "sample_seg": seg
+                }
             ret['level_' + str(i_level)] = result
 
         return ret
@@ -1764,14 +1778,14 @@ class LitNeRFSegArt(LitModel):
             minibatch_result = self.model.forward(minibatch_data, False, self.white_bkgd, self.near, self.far)
             # Append the result to the list
             rgb_results.append(minibatch_result["level_1"]["rgb"])
-            rgb_seg_results.append(minibatch_result["level_1"]["rgb_seg"])
+            # rgb_seg_results.append(minibatch_result["level_1"]["rgb_seg"])
             opacity_results.append(minibatch_result['level_1']['opacity'])
             # comp_seg_results.append(minibatch_result["level_1"]["comp_seg"])
             depth_results.append(minibatch_result["level_1"]["depth"])
 
         # Concatenate results from all minibatches
         final_rgb = torch.cat(rgb_results, dim=0)
-        final_rgb_seg = torch.cat(rgb_seg_results, dim=0)
+        # final_rgb_seg = torch.cat(rgb_seg_results, dim=0)
         final_opa = torch.cat(opacity_results, dim=0)
         # final_comp_seg = torch.cat(comp_seg_results, dim=0)
         final_depth = torch.cat(depth_results, dim=0)
@@ -1779,7 +1793,7 @@ class LitNeRFSegArt(LitModel):
         # Return the gathered results as a dictionary
         gathered_results = {
             "rgb": final_rgb,
-            "rgb_seg": final_rgb_seg,
+            # "rgb_seg": final_rgb_seg,
             "opacity": final_opa,
             # "comp_seg": final_comp_seg,
             "depth": final_depth

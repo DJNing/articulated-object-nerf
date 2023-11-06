@@ -328,22 +328,75 @@ def volumetric_seg_rendering(rgb, density, t_vals, dirs, white_bkgd, seg, nocs=N
     return ret_dict
 
 def get_weights(density, dists, eps=1e-10):
-        alpha = 1.0 - torch.exp(-density[..., 0] * dists)
-        accum_prod = torch.cat(
-            [
-                torch.ones_like(alpha[..., :1]),
-                torch.cumprod(1.0 - alpha[..., :-1] + eps, dim=-1),
-            ],
-            dim=-1,
-        )
+    alpha, accum_prod = get_coeff(density, dists, eps=eps)
 
-        weights = alpha * accum_prod
-        return weights
+    weights = alpha * accum_prod
+    return weights
 
-def volumetric_composite_rendering(rgb, density, t_vals, dirs, white_bkgd, \
-                                   seg_mask, seg, nocs=None, mode='paris'):
+def get_coeff(density, dists, eps=1e-10):
+    alpha = 1.0 - torch.exp(-density[..., 0] * dists)
+    accum_prod = torch.cat(
+        [
+            torch.ones_like(alpha[..., :1]),
+            torch.cumprod(1.0 - alpha[..., :-1] + eps, dim=-1),
+        ],
+        dim=-1,
+    )
+    return alpha, accum_prod
 
-    pass
+def volumetric_composite_rendering(rgb, density, t_vals, dirs, \
+                                   seg, nocs=None):
+    '''
+    rgb: [part_num, ray_num, sample_num, 3]
+    density: [part_num, ray_num, sample_num, 1]
+    seg: [part_num, ray_num, sample_num, part_num (include_bg: +1)]
+    t_vals: [part_num * ray_num, sample_num]
+    '''
+    eps = 1e-10
+
+    dists = torch.cat(
+        [
+            t_vals[..., 1:] - t_vals[..., :-1],
+            torch.ones(t_vals[..., :1].shape, device=t_vals.device) * 1e10,
+        ],
+        dim=-1,
+    )
+    dists = dists * torch.norm(dirs[..., None, :], dim=-1) 
+    # dists = dists.unsqueeze(-1) # [r, s, 1]
+    dists = dists.unsqueeze(1) # [r*p, 1, s]
+    dists = dists.view(rgb.shape[0], rgb.shape[1], rgb.shape[2])
+    part_num, ray_num, sample_num, _ = rgb.shape
+    rgb = rgb.permute(1, 0, 2, 3) # [r, p, s, c]
+    density = density.permute(1, 0, 2, 3) # [r, p, s, 1]
+    seg = seg.permute(1, 0, 2, 3) # [r, p, s, p]
+    seg_fg = torch.cat([seg[:, i:i+1, :, i:i+1] for i in range(seg.shape[1])], dim=1) # [r, p, s, 1]
+    seg_density = seg_fg * density
+    dists = dists.permute(1, 0, 2)
+    lambda_i = seg_density[..., 0] * dists # [ r, p, s]
+    alpha = 1.0 - torch.exp(-lambda_i) # [r, p, s]
+    accum_prod = torch.cat(
+        [
+            torch.ones_like(alpha[..., :1]),
+            torch.cumprod(1.0 - alpha[..., :-1] + eps, dim=-1),
+        ],
+        dim=-1,
+    )
+    T_i = accum_prod.prod(dim=1) # [r, s]
+    rgb_part = alpha.unsqueeze(dim=-1) * rgb # [r, p, s, 3]
+    rgb_comp = T_i.unsqueeze(dim=-1) * rgb_part.sum(dim=1)
+    rgb_final = rgb_comp.sum(dim=1)
+    opacity = (T_i * alpha.sum(dim=1)).sum(dim=1)
+    depth = (T_i * (alpha * t_vals.view(rgb.shape[1], rgb.shape[0], -1).permute(1, 0, 2)).sum(dim=1)).sum(dim=1)
+
+    weights = T_i * alpha.sum(dim=1) 
+    weights = weights.repeat(part_num, 1)
+    ret_dict = {
+        "comp_rgb": rgb_final,
+        "opacity": opacity,
+        "depth": depth,
+        "weights": weights
+    }
+    return ret_dict
 
 def volumetric_rendering_seg_mask(rgb, density, t_vals, dirs, white_bkgd, seg_mask, seg, nocs=None):
     '''
