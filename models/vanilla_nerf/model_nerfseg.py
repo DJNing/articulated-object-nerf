@@ -376,6 +376,59 @@ class NeRFSeg(nn.Module):
         render_dict = self.forward(rays, randomized, white_bkgd, near, far)
         return render_dict
 
+    def forward_mlp(self, samples, viewdirs, part_code, randomized, mlp):
+        samples_enc = helper.pos_enc(
+            samples,
+            self.min_deg_point,
+            self.max_deg_point,
+        )
+        viewdirs_enc = helper.pos_enc(viewdirs, 0, self.deg_view)
+        # part_code = rays.get('part_code', None)
+        
+        if part_code is None:
+            raise RuntimeError('part_code not found')
+        part_num = part_code.shape[-1]
+        part_code = part_code.unsqueeze(1).repeat(1, samples_enc.shape[1], 1)
+        part_code = part_code.view([-1, part_num])
+        if self.hparams.use_part_condition:
+            forward_dict = {
+                "x":samples_enc,
+                "condition":viewdirs_enc,
+                "part_code":part_code,
+                "pos_raw":samples
+            }
+            
+        else:
+            forward_dict = {
+                "x":samples_enc,
+                "condition":viewdirs_enc,
+                "part_code":None,
+                "pos_raw":samples
+            }
+
+        mlp_ret_dict = mlp(**forward_dict)
+        raw_rgb = mlp_ret_dict['raw_rgb']
+        raw_density = mlp_ret_dict['raw_density']
+        
+        raw_seg = mlp_ret_dict['raw_seg']
+
+        if self.noise_std > 0 and randomized:
+            raw_density = raw_density + torch.rand_like(raw_density) * self.noise_std
+
+        rgb = self.rgb_activation(raw_rgb)
+        density = self.sigma_activation(raw_density)
+        seg = self.seg_activation(raw_seg)
+        if self.one_hot_activation is not None:
+            seg = self.one_hot_activation(seg)
+
+        
+        result = {
+            "rgb": rgb,
+            "density": density,
+            "seg": seg
+        }
+        return result
+
     def forward_composite_rendering(self, rays, randomized, white_bkgd, near, far, seg_feat=False):
         ret = {}
         for i_level in range(self.num_levels):
@@ -1552,6 +1605,13 @@ class LitNeRFSegArt(LitModel):
             one_hot[:, i] = 1
         return one_hot
 
+    def training_composite_rendering(self, batch):
+        for i_level in range(self.model.num_level):
+
+            pass
+        pass
+
+
     def training_step(self, batch, batch_idx):
 
         for k, v in batch.items():
@@ -1656,11 +1716,6 @@ class LitNeRFSegArt(LitModel):
             opa_loss_f = (max_opa_f - opa_target)**2
             opa_loss = 0.5 * (opa_loss_c.mean() + opa_loss_f.mean())
             self.log("train/opa_loss", opa_loss, on_step=True, prog_bar=True, logger=True)
-            opts = self.optimizers()
-            for pg in opts.param_groups:
-                lr = pg['lr']
-
-            self.log('train/lr', lr, on_step=True, prog_bar=True, logger=True)
             
             loss += 0.1*opa_loss
 
@@ -1717,6 +1772,12 @@ class LitNeRFSegArt(LitModel):
             self.log("train/bg_regularize", bg_regularization, on_step=True)
         
         self.log("train/loss", loss, on_step=True)
+
+        opts = self.optimizers()
+        for pg in opts.param_groups:
+            lr = pg['lr']
+
+        self.log('train/lr', lr, on_step=True, prog_bar=True, logger=True)
         return loss
 
     def training_epoch_end(self, outputs: EPOCH_OUTPUT) -> None:
@@ -1811,9 +1872,42 @@ class LitNeRFSegArt(LitModel):
 
         return gathered_results
 
-    def composit_img_rendering(self, batch):
-        
-        pass
+    def split_forward_composite(self, list_dict):
+        '''
+        list of input dicts
+        '''
+        chunk_size = self.hparams.forward_chunk 
+        N = list_dict[0]['rays_o'].shape[0]
+        rgb_results = []
+        opacity_results = []
+        depth_results = []
+        for i in range(0, N, chunk_size):
+            # Get a minibatch of data
+            start_idx = i
+            end_idx = min(i + chunk_size, N)
+            minibatch_data = {
+                "rays_o": [input_dict["rays_o"][start_idx:end_idx] for input_dict in list_dict],
+                "rays_d": [input_dict["rays_d"][start_idx:end_idx] for input_dict in list_dict],
+                "viewdirs": [input_dict["viewdirs"][start_idx:end_idx] for input_dict in list_dict],
+                "part_code": [input_dict["part_code"][start_idx:end_idx] for input_dict in list_dict]
+            }
+            for k, v in minibatch_data.items():
+                minibatch_data[k] = torch.cat(v, dim=0)
+            minibatch_result = self.model.forward(minibatch_data, False, self.white_bkgd, self.near, self.far)
+            rgb_results.append(minibatch_result["level_1"]["rgb"])
+            
+            opacity_results.append(minibatch_result['level_1']['opacity'])
+            depth_results.append(minibatch_result['level_1']['depth'])
+
+        final_rgb = torch.cat(rgb_results, dim=0)
+        final_opacity = torch.cat(opacity_results, dim=0)
+        final_depth = torch.cat(depth_results, dim=0)
+        ret_dict = {
+            'rgb': final_rgb,
+            'opacity': final_opacity,
+            'depth': final_depth
+        }
+        return ret_dict
     
     def render_img(self, batch):
         c2w = batch['c2w']
@@ -1822,36 +1916,50 @@ class LitNeRFSegArt(LitModel):
         img_list = []
         opacity_list = []
         depth_list = []
-        for part in range(self.part_num):
-            # part_code = F.one_hot(torch.Tensor(part+1).long(), self.part_num).reshape([1, -1]).repeat(ray_num, 1).to(c2w)
-            # part_code = torch.zeros([ray_num, self.part_num])
-            # part_code[:, part] = 1
-            part_code = self.get_part_code(ray_num, part)
-            part_code = part_code.to(c2w)
+        if self.hparams.composite_rendering:
+            input_dict_list = []
+            for part in range(self.part_num):
+                part_code = self.get_part_code(ray_num, part)
+                part_code = part_code.to(c2w)
 
-            if part == 0:
-                c2w_part = c2w
-            else:
-                c2w_part = self.art_list[part-1](c2w)
-            
-            rays_o, viewdirs, rays_d = get_rays_torch_multiple_c2w(batch['dirs'], c2w_part[:, :3, :], output_view_dirs=True)
-            input_dict = {
-                'rays_o': rays_o,
-                'rays_d': rays_d,
-                'viewdirs': viewdirs,
-                'part_code': part_code
-            }
-            render_dict = self.split_forward(input_dict)
-            if self.hparams.composite_rendering:
-                rgb = render_dict['rgb']
-                opacity = render_dict['opacity']
-                depth = render_dict['depth']
-                ret_dict = {
-                    "rgb": rgb,
-                    "opacity": opacity,
-                    "depth": depth
+                if part == 0:
+                    c2w_part = c2w
+                else:
+                    c2w_part = self.art_list[part-1](c2w)
+                
+                rays_o, viewdirs, rays_d = get_rays_torch_multiple_c2w(batch['dirs'], c2w_part[:, :3, :], output_view_dirs=True)
+                input_dict = {
+                    'rays_o': rays_o,
+                    'rays_d': rays_d,
+                    'viewdirs': viewdirs,
+                    'part_code': part_code
                 }
-            else:
+                input_dict_list += [input_dict]
+
+            render_dict = self.split_forward_composite(input_dict_list)
+            ret_dict = render_dict
+        else:
+            for part in range(self.part_num):
+                # part_code = F.one_hot(torch.Tensor(part+1).long(), self.part_num).reshape([1, -1]).repeat(ray_num, 1).to(c2w)
+                # part_code = torch.zeros([ray_num, self.part_num])
+                # part_code[:, part] = 1
+                part_code = self.get_part_code(ray_num, part)
+                part_code = part_code.to(c2w)
+
+                if part == 0:
+                    c2w_part = c2w
+                else:
+                    c2w_part = self.art_list[part-1](c2w)
+                
+                rays_o, viewdirs, rays_d = get_rays_torch_multiple_c2w(batch['dirs'], c2w_part[:, :3, :], output_view_dirs=True)
+                input_dict = {
+                    'rays_o': rays_o,
+                    'rays_d': rays_d,
+                    'viewdirs': viewdirs,
+                    'part_code': part_code
+                }
+                render_dict = self.split_forward(input_dict)
+                
                 img_list += [render_dict['rgb'].unsqueeze(0)]
                 part_img_list += [render_dict['rgb_seg'].unsqueeze(0)] # p * [1, N, 3]
                 opacity_list += [render_dict['opacity'].unsqueeze(0)]
@@ -1890,7 +1998,7 @@ class LitNeRFSegArt(LitModel):
             opacity = ret_dict['opacity']
             depth = ret_dict['depth']
             rgb_target = batch['img']
-            rgb_loss = helper.img2mse(final_img, rgb_target)
+            rgb_loss = helper.img2mse(rgb, rgb_target)
             psnr = helper.mse2psnr(rgb_loss)
             ret_dict = {
                 "img": batch['img'],
@@ -1899,7 +2007,14 @@ class LitNeRFSegArt(LitModel):
                 "opacity": opacity,
                 "valid_mask": batch.get('valid_mask', None)
             }
-            pass
+            ret_dict = {
+                'rgb': rgb,
+                'img': batch['img'],
+                'psnr': psnr,
+                'loss': rgb_loss,
+                'opacity': opacity,
+                'valid_mask': batch.get('valid_mask', None)
+            }
         else:
             img_list = ret_dict["part_img"]
             opacity = ret_dict["opacity"]
@@ -1940,8 +2055,8 @@ class LitNeRFSegArt(LitModel):
                 pil_img = T.ToPILImage()(img)
                 return pil_img
             
-            gt_list = [toPIL(output['img']) for output in outputs]
-            img_list = [toPIL(output['rgb']) for output in outputs]
+            gt_list = [toPIL(output['img'], H, W) for output in outputs]
+            img_list = [toPIL(output['rgb'], H, W) for output in outputs]
             if self.sanity_check:
                 log_key = "val/sanity_check"
             else:
