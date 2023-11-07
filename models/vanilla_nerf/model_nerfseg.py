@@ -611,7 +611,8 @@ class NeRFSeg(nn.Module):
                     "comp_seg": render_dict['comp_seg'],
                     "density": density,
                     "opacity": render_dict['opacity'],
-                    "sample_seg": seg
+                    "sample_seg": seg,
+                    "rgb_seg": render_dict['comp_rgb_seg']
                 }
             ret['level_' + str(i_level)] = result
 
@@ -1603,15 +1604,24 @@ class LitNeRFSegArt(LitModel):
             ret['level_' + str(i_level)] = result
         '''
         rgb_target = batch["rgb"]
+        if self.hparams.composite_rendering:
+            rgb_coarse = rendered_results['level_0']['rgb']
+            rgb_fine = rendered_results['level_1']['rgb']
 
-        rgb_coarse = rendered_results['level_0']['rgb_seg']
-        rgb_fine = rendered_results['level_1']['rgb_seg']
+            rgb_coarse = rgb_coarse.view([ray_num, 3])
+            rgb_fine = rgb_fine.view([ray_num, 3])
 
-        rgb_coarse = rgb_coarse.view([-1, ray_num, 3]).sum(dim=0)
-        rgb_fine = rgb_fine.view([-1, ray_num, 3]).sum(dim=0)
+            loss0 = helper.img2mse(rgb_coarse, rgb_target)
+            loss1 = helper.img2mse(rgb_fine, rgb_target)
+        else:
+            rgb_coarse = rendered_results['level_0']['rgb_seg']
+            rgb_fine = rendered_results['level_1']['rgb_seg']
 
-        loss0 = helper.img2mse(rgb_coarse, rgb_target)
-        loss1 = helper.img2mse(rgb_fine, rgb_target)
+            rgb_coarse = rgb_coarse.view([-1, ray_num, 3]).sum(dim=0)
+            rgb_fine = rgb_fine.view([-1, ray_num, 3]).sum(dim=0)
+
+            loss0 = helper.img2mse(rgb_coarse, rgb_target)
+            loss1 = helper.img2mse(rgb_fine, rgb_target)
         if self.hparams.record_hard_sample:
             if not self.train_dataset.use_sample_list:
                 loss0_dict = self._calculate_loss_and_record_sample(rgb_coarse, rgb_target, batch['idx'])
@@ -1801,6 +1811,10 @@ class LitNeRFSegArt(LitModel):
 
         return gathered_results
 
+    def composit_img_rendering(self, batch):
+        
+        pass
+    
     def render_img(self, batch):
         c2w = batch['c2w']
         ray_num = c2w.shape[0]
@@ -1828,16 +1842,26 @@ class LitNeRFSegArt(LitModel):
                 'part_code': part_code
             }
             render_dict = self.split_forward(input_dict)
-            img_list += [render_dict['rgb'].unsqueeze(0)]
-            part_img_list += [render_dict['rgb_seg'].unsqueeze(0)] # p * [1, N, 3]
-            opacity_list += [render_dict['opacity'].unsqueeze(0)]
-            depth_list += [render_dict['depth'].unsqueeze(0)]
-            ret_dict = {
-                'part_img': part_img_list,
-                'img': img_list,
-                'opacity': opacity_list,
-                'depth': depth_list
-            }
+            if self.hparams.composite_rendering:
+                rgb = render_dict['rgb']
+                opacity = render_dict['opacity']
+                depth = render_dict['depth']
+                ret_dict = {
+                    "rgb": rgb,
+                    "opacity": opacity,
+                    "depth": depth
+                }
+            else:
+                img_list += [render_dict['rgb'].unsqueeze(0)]
+                part_img_list += [render_dict['rgb_seg'].unsqueeze(0)] # p * [1, N, 3]
+                opacity_list += [render_dict['opacity'].unsqueeze(0)]
+                depth_list += [render_dict['depth'].unsqueeze(0)]
+                ret_dict = {
+                    'part_img': part_img_list,
+                    'img': img_list,
+                    'opacity': opacity_list,
+                    'depth': depth_list
+                }
         return ret_dict
 
     def validation_step(self, batch, batch_idx):
@@ -1861,24 +1885,40 @@ class LitNeRFSegArt(LitModel):
             batch[k] = v.squeeze(0)
         # img_list = self.render_img(batch)
         ret_dict = self.render_img(batch)
-        img_list = ret_dict["part_img"]
-        opacity = ret_dict["opacity"]
-        depth = ret_dict["depth"]
-        final_img = compose_img_by_depth(img_list, depth).view([-1, 3])
-        torch.save(ret_dict, "image_composition/tensor_dict.pt")
-        # final_img = torch.cat(img_list, dim=0).sum(dim=0).view([-1, 3])
-        rgb_target = batch['img']
-        rgb_loss = helper.img2mse(final_img, rgb_target)
-        psnr = helper.mse2psnr(rgb_loss)
-        img_list += [final_img]
-        ret_dict = {
-            'img_list':img_list,
-            'psnr': psnr,
-            'loss': rgb_loss,
-            'img': batch['img'],
-            'opacity': opacity,
-            'valid_mask': batch.get('valid_mask', None)
-        }
+        if self.hparams.composite_rendering:
+            rgb = ret_dict['rgb']
+            opacity = ret_dict['opacity']
+            depth = ret_dict['depth']
+            rgb_target = batch['img']
+            rgb_loss = helper.img2mse(final_img, rgb_target)
+            psnr = helper.mse2psnr(rgb_loss)
+            ret_dict = {
+                "img": batch['img'],
+                "rgb": rgb,
+                "depth": depth,
+                "opacity": opacity,
+                "valid_mask": batch.get('valid_mask', None)
+            }
+            pass
+        else:
+            img_list = ret_dict["part_img"]
+            opacity = ret_dict["opacity"]
+            depth = ret_dict["depth"]
+            final_img = compose_img_by_depth(img_list, depth).view([-1, 3])
+            # torch.save(ret_dict, "image_composition/tensor_dict.pt")
+            # final_img = torch.cat(img_list, dim=0).sum(dim=0).view([-1, 3])
+            rgb_target = batch['img']
+            rgb_loss = helper.img2mse(final_img, rgb_target)
+            psnr = helper.mse2psnr(rgb_loss)
+            img_list += [final_img]
+            ret_dict = {
+                'img_list':img_list,
+                'psnr': psnr,
+                'loss': rgb_loss,
+                'img': batch['img'],
+                'opacity': opacity,
+                'valid_mask': batch.get('valid_mask', None)
+            }
         return ret_dict
 
     def on_sanity_check_start(self):
@@ -1893,39 +1933,54 @@ class LitNeRFSegArt(LitModel):
         #     return
         psnr = sum(ret['psnr'] for ret in outputs) / len(outputs)
         self.log("val/psnr", psnr, on_epoch=True)
-        
-        log_idx = torch.randint(low=0, high=len(outputs), size=(1,))
-        log_output = outputs[log_idx[0]]
-        img_list = log_output['img_list']
-        opacity = log_output['opacity']
-        gt = log_output['img']
-        mask = log_output['valid_mask']
-        if self.sanity_check:
-            log_key = "val/sanity_check"
+        if self.hparams.composite_rendering:
+            W, H = self.hparams.img_wh
+            def toPIL(tensor, h, w, c=3):
+                img = tensor.view(h, w, c).permute(2, 0, 1).cpu()
+                pil_img = T.ToPILImage()(img)
+                return pil_img
+            
+            gt_list = [toPIL(output['img']) for output in outputs]
+            img_list = [toPIL(output['rgb']) for output in outputs]
+            if self.sanity_check:
+                log_key = "val/sanity_check"
+            else:
+                log_key = "val/results"
+            self.logger.log_image(key=log_key+'/gt', images=gt_list)
+            self.logger.log_image(key=log_key+'/pred', images=img_list)
         else:
-            log_key = "val/results"
+            log_idx = torch.randint(low=0, high=len(outputs), size=(1,))
+            log_output = outputs[log_idx[0]]
+            img_list = log_output['img_list']
+            opacity = log_output['opacity']
+            gt = log_output['img']
+            mask = log_output['valid_mask']
+            if self.sanity_check:
+                log_key = "val/sanity_check"
+            else:
+                log_key = "val/results"
 
-        part_imgs = img_list[:-1]
-        final_img = img_list[-1]
-        W, H = self.hparams.img_wh
-        def get_img(rgb_tensor, H, W, c=3):
-            img = rgb_tensor.view(H, W, c).permute(2, 0, 1).cpu()
-            return img
-        log_part_imgs = [T.ToPILImage()(get_img(part_img, H, W)) for part_img in part_imgs]
-        log_opacity = [T.ToPILImage()(get_img(opa, H, W, c=1)) for opa in opacity]
-        log_final_img = get_img(final_img, H, W)
-        log_gt_img = get_img(gt, H, W)
-        stack = torch.stack([log_gt_img, log_final_img])
-        grid = make_grid(stack, nrow=2)
-        log_grid = T.ToPILImage()(grid)
-        part_key = log_key + '/parts'
-        final_key = log_key + '/final'
-        for idx, part_img in enumerate(log_part_imgs):
-            temp_key = part_key + '_' + str(idx)
-            self.logger.log_image(key=temp_key, images = [part_img])
+            part_imgs = img_list[:-1]
+            final_img = img_list[-1]
+            W, H = self.hparams.img_wh
+            def get_img(rgb_tensor, H, W, c=3):
+                img = rgb_tensor.view(H, W, c).permute(2, 0, 1).cpu()
+                return img
+            log_part_imgs = [T.ToPILImage()(get_img(part_img, H, W)) for part_img in part_imgs]
+            log_opacity = [T.ToPILImage()(get_img(opa, H, W, c=1)) for opa in opacity]
+            log_final_img = get_img(final_img, H, W)
+            log_gt_img = get_img(gt, H, W)
+            stack = torch.stack([log_gt_img, log_final_img])
+            grid = make_grid(stack, nrow=2)
+            log_grid = T.ToPILImage()(grid)
+            part_key = log_key + '/parts'
+            final_key = log_key + '/final'
+            for idx, part_img in enumerate(log_part_imgs):
+                temp_key = part_key + '_' + str(idx)
+                self.logger.log_image(key=temp_key, images = [part_img])
 
-        self.logger.log_image(key=final_key, images = [log_grid])
-        self.logger.log_image(key=log_key + '/opacity', images = log_opacity)
+            self.logger.log_image(key=final_key, images = [log_grid])
+            self.logger.log_image(key=log_key + '/opacity', images = log_opacity)
         
         # mask = mask.view(H, W).permute(2, 0, 1).cpu()
         # log_mask = T.ToPILImage()(mask)
