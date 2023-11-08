@@ -345,7 +345,7 @@ def get_coeff(density, dists, eps=1e-10):
     return alpha, accum_prod
 
 def volumetric_composite_rendering(rgb, density, t_vals, dirs, \
-                                   seg, nocs=None):
+                                   seg, rgb_activation=False):
     '''
     rgb: [part_num, ray_num, sample_num, 3]
     density: [part_num, ray_num, sample_num, 1]
@@ -382,14 +382,28 @@ def volumetric_composite_rendering(rgb, density, t_vals, dirs, \
         dim=-1,
     )
     T_i = accum_prod.prod(dim=1) # [r, s]
-    rgb_part = alpha.unsqueeze(dim=-1) * rgb # [r, p, s, 3]
-    rgb_comp = T_i.unsqueeze(dim=-1) * rgb_part.sum(dim=1)
-    rgb_final = rgb_comp.sum(dim=1)
-    opacity = (T_i * alpha.sum(dim=1)).sum(dim=1)
-    depth = (T_i * (alpha * t_vals.view(rgb.shape[1], rgb.shape[0], -1).permute(1, 0, 2)).sum(dim=1)).sum(dim=1)
+    T_i = T_i.unsqueeze(1).repeat(1, accum_prod.shape[1], 1) # [r, p, s]
+    rgb_alpha = alpha.unsqueeze(dim=-1) * rgb # [r, p, s, 3]
+    rgb_part = T_i.unsqueeze(dim=-1) * rgb_alpha #[r, p, s, 3]
+    rgb_part = rgb_part.sum(dim=2) # [r, p, 3]
+    if rgb_activation:
+        import torch.nn as nn
+        rgb_act = nn.Softmax(dim=1)
+        rgb_weight = rgb_part.sum(dim=-1) # [r, p]
+        
+        from models.vanilla_nerf.model_nerfseg import OneHotActivation
+        one_hot_act = OneHotActivation
+        rgb_mask = one_hot_act(rgb_act(rgb_weight))
+        rgb_part_act = rgb_mask.unsqueeze(-1) * rgb_part # [r, p, 3]
+        rgb_final = rgb_part_act.sum(dim=1)
+        pass
+    else:
+        rgb_final = rgb_part.sum(dim=1)
+    opacity = (T_i * alpha).sum(dim=1).sum(dim=1)
+    depth = (T_i * (alpha * t_vals.view(rgb.shape[1], rgb.shape[0], -1).permute(1, 0, 2))).sum(dim=1).sum(1)
 
-    weights = T_i * alpha.sum(dim=1) 
-    weights = weights.repeat(part_num, 1)
+    weights = (T_i * alpha).view(-1, T_i.shape[-1])
+    # weights = weights.repeat(part_num, 1)
     ret_dict = {
         "comp_rgb": rgb_final,
         "opacity": opacity,

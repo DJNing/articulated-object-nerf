@@ -231,6 +231,7 @@ def get_parser():
     parser.add_argument('--use_dist_reg', type=bool, default=False, help="whether to use local smoothness loss")
     parser.add_argument('--use_bg_reg', type=bool, default=False, help="whether to use background regularization loss")
     parser.add_argument('--composite_rendering', type=bool, default=False, help="whether to use composite_rendering")
+    parser.add_argument('--rgb_activation', type=bool, default=False, help="whether to use rgb_activation")
     return parser
 
 def get_opts():

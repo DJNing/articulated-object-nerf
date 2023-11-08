@@ -623,7 +623,7 @@ class NeRFSeg(nn.Module):
                 else:
                     part_seg = seg.view(part_num, -1, sample_num, part_num)
                 render_dict = helper.volumetric_composite_rendering(
-                    part_rgb, part_density, t_vals, rays['rays_d'], part_seg
+                    part_rgb, part_density, t_vals, rays['rays_d'], part_seg, self.hparams.rgb_activation
                 )
             else:
                 # select the right seg to feed in rendering
