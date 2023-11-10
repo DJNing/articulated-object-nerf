@@ -232,6 +232,8 @@ def get_parser():
     parser.add_argument('--use_bg_reg', type=bool, default=False, help="whether to use background regularization loss")
     parser.add_argument('--composite_rendering', type=bool, default=False, help="whether to use composite_rendering")
     parser.add_argument('--rgb_activation', type=bool, default=False, help="whether to use rgb_activation")
+    parser.add_argument('--scan_density', type=bool, default=False, help="whether to scan the nerf space to save density for visualization")
+    parser.add_argument('--grid_num', type=int, default=256, help="number of grids used for density scan")
     return parser
 
 def get_opts():

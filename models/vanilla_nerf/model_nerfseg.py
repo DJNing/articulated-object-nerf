@@ -1456,10 +1456,16 @@ class LitNeRFSegArt(LitModel):
         self.hparams.update(vars(hparams))
         super(LitNeRFSegArt, self).__init__()
         self.hparams.white_back = False
-        # load pre-trained NeRF model
+        
         self.model = NeRFSeg(self.hparams)
-        if self.hparams.nerf_ckpt is not None:
-            helper.load_state_dict_and_report(self, self.hparams.nerf_ckpt)
+
+        if self.hparams.run_eval:
+            # ckpt_path = self.hparams.cktp_path
+            helper.load_state_dict_and_report(self, self.hparams.cktp_path)
+        else:
+            # load pre-trained NeRF model
+            if self.hparams.nerf_ckpt is not None:
+                helper.load_state_dict_and_report(self, self.hparams.nerf_ckpt)
 
         self.part_num = self.hparams.part_num
         self.lr_final = self.hparams.lr_final
@@ -2149,7 +2155,10 @@ class LitNeRFSegArt(LitModel):
         #     self.logger.log(key+"_origin", origin)
         #     self.logger.log(key+"_Q", Q)
         return
-
+    def gen_scan_samples(self):
+        grid_num = self.hparams.grid_num
+        
+        pass
     def test_step(self, batch, batch_idx):
         """
         batch = {
@@ -2167,38 +2176,47 @@ class LitNeRFSegArt(LitModel):
             if k == "obj_idx":
                 continue
             batch[k] = v.squeeze(0)
-        img_list = self.render_img(batch)
-        final_img = torch.cat(img_list, dim=0).sum(dim=0).view([-1, 3])
-        rgb_target = batch['img']
-        rgb_loss = helper.img2mse(final_img, rgb_target)
-        psnr = helper.mse2psnr(rgb_loss)
-        img_list += [final_img]
-        ret_dict = {
-            'img_list':img_list,
-            'psnr': psnr,
-            'loss': rgb_loss,
-            'img': batch['img']
-        }
+        
+        if self.hparams.scan_density:
+            pass
+            ret_dict = {}
+        else:
+            img_list = self.render_img(batch)
+            final_img = torch.cat(img_list, dim=0).sum(dim=0).view([-1, 3])
+            rgb_target = batch['img']
+            rgb_loss = helper.img2mse(final_img, rgb_target)
+            psnr = helper.mse2psnr(rgb_loss)
+            img_list += [final_img]
+            ret_dict = {
+                'img_list':img_list,
+                'psnr': psnr,
+                'loss': rgb_loss,
+                'img': batch['img']
+            }
         return ret_dict
 
     def test_epoch_end(self, outputs):
-        psnr = sum(ret['psnr'] for ret in outputs) / len(outputs)
-        self.log("test/psnr", psnr, on_epoch=True)
-        save_path = os.path.join(self.hparams.output_path, self.hparams.exp_name, 'test_imgs')
-        W, H = self.hparams.img_wh
-        for i in range(len(outputs)):
+        if self.hparams.scan_density:
+            pass
+            return
+        else:
+            psnr = sum(ret['psnr'] for ret in outputs) / len(outputs)
+            self.log("test/psnr", psnr, on_epoch=True)
+            save_path = os.path.join(self.hparams.output_path, self.hparams.exp_name, 'test_imgs')
+            W, H = self.hparams.img_wh
+            for i in range(len(outputs)):
 
-            img_list = outputs[i]['img_list']
-            
-            final_img = img_list[-1].view(H, W, 3).permute(2, 0, 1).cpu()
+                img_list = outputs[i]['img_list']
+                
+                final_img = img_list[-1].view(H, W, 3).permute(2, 0, 1).cpu()
 
-            final_pil = T.ToPILImage()(final_img)
+                final_pil = T.ToPILImage()(final_img)
 
-            fname = str(i).zfill(3) + '.png'
-            save_fname = os.path.join(save_path, fname)
-            final_pil.save(save_fname)
+                fname = str(i).zfill(3) + '.png'
+                save_fname = os.path.join(save_path, fname)
+                final_pil.save(save_fname)
         
-        return psnr
+            return psnr
 
 class OneHotActivation(torch.autograd.Function):
     @staticmethod

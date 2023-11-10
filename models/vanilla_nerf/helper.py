@@ -596,3 +596,18 @@ def sample_pdf(bins, weights, origins, directions, t_vals, num_samples, randomiz
     t_vals = torch.sort(torch.cat([t_vals, t_samples], dim=-1), dim=-1).values
     coords = cast_rays(t_vals, origins, directions)
     return t_vals, coords
+
+
+def generate_samples(x_limits, y_limits, z_limits, num_samples):
+    # Generate 1D tensors for each axis
+    x_values = torch.linspace(x_limits[0], x_limits[1], num_samples[0])
+    y_values = torch.linspace(y_limits[0], y_limits[1], num_samples[1])
+    z_values = torch.linspace(z_limits[0], z_limits[1], num_samples[2])
+
+    # Create a 3D grid using torch.meshgrid
+    X, Y, Z = torch.meshgrid(x_values, y_values, z_values)
+
+    # Reshape the grid to obtain the sample positions
+    samples = torch.stack([X.flatten(), Y.flatten(), Z.flatten()], dim=1)
+
+    return samples

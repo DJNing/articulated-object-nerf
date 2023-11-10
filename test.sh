@@ -1,0 +1,1 @@
+python run.py --config config/test_nerfartseg_debug_local.json

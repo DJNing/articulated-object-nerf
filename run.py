@@ -87,7 +87,7 @@ def main(hparams):
             save_top_k=5,
             mode="max",
             save_last=True,
-            every_n_epochs=10,
+            every_n_epochs=5,
             # every_n_epochs=50,
         )
 
