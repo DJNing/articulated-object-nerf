@@ -401,14 +401,18 @@ def volumetric_composite_rendering(rgb, density, t_vals, dirs, \
         rgb_final = rgb_part.sum(dim=1)
     opacity = (T_i * alpha).sum(dim=1).sum(dim=1)
     depth = (T_i * (alpha * t_vals.view(rgb.shape[1], rgb.shape[0], -1).permute(1, 0, 2))).sum(dim=1).sum(1)
+    opa_acc = (T_i * alpha).sum(dim=-1)
+    # opa_prob = s
+    # weights = (T_i * alpha).view(-1, T_i.shape[-1])
 
-    weights = (T_i * alpha).view(-1, T_i.shape[-1])
+    weights = (T_i * alpha).sum(dim=1).repeat(part_num, 1)
     # weights = weights.repeat(part_num, 1)
     ret_dict = {
         "comp_rgb": rgb_final,
         "opacity": opacity,
         "depth": depth,
-        "weights": weights
+        "weights": weights,
+        "opa_part": opa_acc
     }
     return ret_dict
 

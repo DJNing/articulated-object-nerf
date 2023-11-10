@@ -653,7 +653,8 @@ class NeRFSeg(nn.Module):
                     "depth": render_dict['depth'],
                     "weights": render_dict['weights'],
                     "density": density,
-                    "sample_seg": seg
+                    "sample_seg": seg,
+                    "opa_part": render_dict['opa_part']
                 }
             else:
                 result = {
@@ -1673,6 +1674,41 @@ class LitNeRFSegArt(LitModel):
 
             loss0 = helper.img2mse(rgb_coarse, rgb_target)
             loss1 = helper.img2mse(rgb_fine, rgb_target)
+
+            opa_part_0 = rendered_results['level_0']['opa_part']
+            opa_part_1 = rendered_results['level_1']['opa_part']
+            opa_target = batch['mask']
+            bceloss = torch.nn.BCELoss()
+            opa_max_0, _ = opa_part_0.max(dim=1)
+            opa_max_1, _ = opa_part_1.max(dim=1)
+            # opa_loss_0 = bceloss(opa_max_0, opa_target.view(-1))
+            # opa_loss_1 = bceloss(opa_max_1, opa_target.view(-1))
+            
+            opa_loss_0 = F.l1_loss(opa_max_0, opa_target.view(-1))
+            opa_loss_1 = F.l1_loss(opa_max_1, opa_target.view(-1))
+
+            def get_one_hot_loss(opa):
+                '''
+                opa: shape [r, p]
+                '''
+                eps = 1e-7
+                max_opa, _ = opa.max(dim=1)
+                opa_sum = opa.sum(dim=1) + eps
+                opa_prob = max_opa / opa_sum
+                loss = torch.abs(opa_prob - opa.sum(dim=1) / opa_sum)
+                return loss.mean()
+
+            one_hot_loss_0 = get_one_hot_loss(opa_part_0)
+            one_hot_loss_1 = get_one_hot_loss(opa_part_1)
+
+
+            self.log("train/opa_loss_0", opa_loss_0, on_step=True, logger=True)
+            self.log("train/opa_loss_1", opa_loss_1, on_step=True, logger=True)
+            self.log("train/one_hot_loss_0", one_hot_loss_0, on_step=True, logger=True)
+            self.log("train/one_hot_loss_1", one_hot_loss_1, on_step=True, logger=True)
+
+            loss = loss0 + loss1 + 0.1*(opa_loss_0 + opa_loss_1) + 0.001*(one_hot_loss_0 + one_hot_loss_1)
+
         else:
             rgb_coarse = rendered_results['level_0']['rgb_seg']
             rgb_fine = rendered_results['level_1']['rgb_seg']
@@ -1682,6 +1718,8 @@ class LitNeRFSegArt(LitModel):
 
             loss0 = helper.img2mse(rgb_coarse, rgb_target)
             loss1 = helper.img2mse(rgb_fine, rgb_target)
+
+            loss = loss0 + loss1
         if self.hparams.record_hard_sample:
             if not self.train_dataset.use_sample_list:
                 loss0_dict = self._calculate_loss_and_record_sample(rgb_coarse, rgb_target, batch['idx'])
@@ -1692,16 +1730,19 @@ class LitNeRFSegArt(LitModel):
                 sample_1 = loss1_dict['hard_samples']
                 samples = torch.cat((sample_0, sample_1)).unique()
                 self.train_dataset.sample_list += [samples]
+
+                loss = loss0 + loss1
         else:
             loss0 = helper.img2mse(rgb_coarse, rgb_target)
             loss1 = helper.img2mse(rgb_fine, rgb_target)
+
+            loss = loss0 + loss1
 
         psnr0 = helper.mse2psnr(loss0)
         psnr1 = helper.mse2psnr(loss1)
     
         self.log("train/psnr1", psnr1, on_step=True, prog_bar=True, logger=True)
         self.log("train/psnr0", psnr0, on_step=True, prog_bar=True, logger=True)
-        loss = loss0 + loss1
         # opacity loss
         if self.hparams.use_opa_loss:
             opa_target = batch['mask']
@@ -1849,14 +1890,14 @@ class LitNeRFSegArt(LitModel):
             minibatch_result = self.model.forward(minibatch_data, False, self.white_bkgd, self.near, self.far)
             # Append the result to the list
             rgb_results.append(minibatch_result["level_1"]["rgb"])
-            # rgb_seg_results.append(minibatch_result["level_1"]["rgb_seg"])
+            rgb_seg_results.append(minibatch_result["level_1"]["rgb_seg"])
             opacity_results.append(minibatch_result['level_1']['opacity'])
             # comp_seg_results.append(minibatch_result["level_1"]["comp_seg"])
             depth_results.append(minibatch_result["level_1"]["depth"])
 
         # Concatenate results from all minibatches
         final_rgb = torch.cat(rgb_results, dim=0)
-        # final_rgb_seg = torch.cat(rgb_seg_results, dim=0)
+        final_rgb_seg = torch.cat(rgb_seg_results, dim=0)
         final_opa = torch.cat(opacity_results, dim=0)
         # final_comp_seg = torch.cat(comp_seg_results, dim=0)
         final_depth = torch.cat(depth_results, dim=0)
@@ -1864,7 +1905,7 @@ class LitNeRFSegArt(LitModel):
         # Return the gathered results as a dictionary
         gathered_results = {
             "rgb": final_rgb,
-            # "rgb_seg": final_rgb_seg,
+            "rgb_seg": final_rgb_seg,
             "opacity": final_opa,
             # "comp_seg": final_comp_seg,
             "depth": final_depth
