@@ -2090,9 +2090,7 @@ class LitNeRFSegArt(LitModel):
         self.sanity_check = False
 
     def validation_epoch_end(self, outputs):
-        # pass sanity check
-        # if self.sanity_check:
-        #     return
+        
         psnr = sum(ret['psnr'] for ret in outputs) / len(outputs)
         self.log("val/psnr", psnr, on_epoch=True)
         if self.hparams.composite_rendering:
@@ -2155,10 +2153,75 @@ class LitNeRFSegArt(LitModel):
         #     self.logger.log(key+"_origin", origin)
         #     self.logger.log(key+"_Q", Q)
         return
+    
+    def scan_density(self):
+
+        samples = self.gen_scan_samples()
+        coarse_mlp = self.model.coarse_mlp
+        fine_mlp = self.model.fine_mlp
+        samples = samples.to(self.model.coarse_mlp.density_layer.weight)
+        samples_enc = helper.pos_enc(samples, 0, 10)
+        forward_dict = {
+            'x': samples_enc,
+            'condition': samples_enc,
+            'part_code': None,
+            'pos_raw': samples
+        }
+
+        scan_dict = self.split_scan(forward_dict, coarse_mlp, fine_mlp)
+
+        return scan_dict
+
+    def split_scan(self, forward_dict, coarse_mlp, fine_mlp):
+        N = forward_dict['x'].shape[0]
+        chunk_size = self.hparams.forward_chunk * 64
+        c_density_results = []
+        c_seg_results = []
+        f_density_results = []
+        f_seg_results = []
+        for i in range(0, N, chunk_size):
+            # Get a minibatch of data
+            start_idx = i
+            end_idx = min(i + chunk_size, N)
+            minibatch_data = {
+                "x": forward_dict["rays_o"][start_idx:end_idx],
+                "condition": forward_dict["rays_d"][start_idx:end_idx],
+                "part_code": None,
+                "pos_raw": forward_dict["pos_raw"][start_idx:end_idx]
+            }
+            coarse_result = coarse_mlp(**minibatch_data)
+            fine_result = fine_mlp(**minibatch_data)
+
+            density_c = coarse_result['density']
+            density_f = fine_result['density']
+
+            seg_c = coarse_result['seg']
+            seg_f = fine_result['seg']
+
+            c_density_results += [density_c]
+            c_seg_results += [seg_c]
+
+            f_density_results += [density_f]
+            f_seg_results += [seg_f]
+
+        ret_dict = {
+            'f_density_results': torch.cat(f_density_results, dim=0),
+            'f_seg_results': torch.cat(f_seg_results, dim=0),
+            'c_density_results': torch.cat(c_density_results, dim=0),
+            'c_seg_results': torch.cat(c_seg_results, dim=0)
+        }
+        return ret_dict
+
     def gen_scan_samples(self):
+        '''
+        output: positions of 3D voxel grids [N, 3]
+        '''
         grid_num = self.hparams.grid_num
+        axix_lim = [-1, 1]
         
-        pass
+        samples = helper.get_voxel_centers(axix_lim, axix_lim, axix_lim, grid_num, grid_num, grid_num)
+        return samples
+
     def test_step(self, batch, batch_idx):
         """
         batch = {

@@ -71,7 +71,7 @@ def mse2psnr(x):
 
 
 def cast_rays(t_vals, origins, directions):
-    return origins[..., None, :] + t_vals[..., None] * directions[..., None, :]
+    return origins[..., None, :] + t_vals.unsqueeze(-1) * directions[..., None, :]
 
 
 def get_ray_limits(rays_o: torch.Tensor, rays_d: torch.Tensor, box_side_length=2):
@@ -224,7 +224,7 @@ def volumetric_rendering(rgb, density, t_vals, dirs, white_bkgd, nocs=None, seg=
 
     weights = alpha * accum_prod
 
-    comp_rgb = (weights[..., None] * rgb).sum(dim=-2)
+    comp_rgb = (weights.unsqueeze(-1) * rgb).sum(dim=-2)
     depth = (weights * t_vals).sum(dim=-1)
 
     depth = torch.nan_to_num(depth, float("inf"))
@@ -234,10 +234,10 @@ def volumetric_rendering(rgb, density, t_vals, dirs, white_bkgd, nocs=None, seg=
     inv_eps = 1 / eps
 
     if white_bkgd:
-        comp_rgb = comp_rgb + (1.0 - acc[..., None])
+        comp_rgb = comp_rgb + (1.0 - acc.unsqueeze(-1))
 
     if nocs is not None:
-        comp_nocs = (weights[..., None] * nocs).sum(dim=-2)
+        comp_nocs = (weights.unsqueeze(-1) * nocs).sum(dim=-2)
         return comp_rgb, acc, weights, comp_nocs
     else:
         return comp_rgb, acc, weights, depth
@@ -288,9 +288,9 @@ def volumetric_seg_rendering(rgb, density, t_vals, dirs, white_bkgd, seg, nocs=N
     weights = get_weights(density, dists, eps=eps)
     seg_weights = get_weights(seg, dists, eps=eps)
 
-    comp_rgb = (weights[..., None] * rgb).sum(dim=-2)
+    comp_rgb = (weights.unsqueeze(-1) * rgb).sum(dim=-2)
 
-    comp_rgb_seg = (weights[..., None] * seg_weights[..., None] * rgb).sum(dim=-2)
+    comp_rgb_seg = (weights.unsqueeze(-1) * seg_weights.unsqueeze(-1) * rgb).sum(dim=-2)
 
     if torch.isnan(comp_rgb).any():
         print('nan in rgb')
@@ -305,10 +305,10 @@ def volumetric_seg_rendering(rgb, density, t_vals, dirs, white_bkgd, seg, nocs=N
     inv_eps = 1 / eps
 
     if white_bkgd:
-        comp_rgb = comp_rgb + (1.0 - acc[..., None])
+        comp_rgb = comp_rgb + (1.0 - acc.unsqueeze(-1))
 
     if nocs is not None:
-        comp_nocs = (weights[..., None] * nocs).sum(dim=-2)
+        comp_nocs = (weights.unsqueeze(-1) * nocs).sum(dim=-2)
         # return comp_rgb, acc, weights, comp_nocs
     else:
         # return comp_rgb, acc, weights, depth
@@ -436,9 +436,9 @@ def volumetric_rendering_seg_mask(rgb, density, t_vals, dirs, white_bkgd, seg_ma
 
     weights = get_weights(mask_density, dists, eps=eps)
 
-    comp_rgb = (weights[..., None] * rgb).sum(dim=-2)
+    comp_rgb = (weights.unsqueeze(-1) * rgb).sum(dim=-2)
 
-    comp_seg = (weights[..., None] * seg).sum(dim=-2)
+    comp_seg = (weights.unsqueeze(-1) * seg).sum(dim=-2)
     if torch.isnan(comp_rgb).any():
         print('nan in rgb')
 
@@ -451,10 +451,10 @@ def volumetric_rendering_seg_mask(rgb, density, t_vals, dirs, white_bkgd, seg_ma
     inv_eps = 1 / eps
 
     if white_bkgd:
-        comp_rgb = comp_rgb + (1.0 - acc[..., None])
+        comp_rgb = comp_rgb + (1.0 - acc.unsqueeze(-1))
 
     if nocs is not None:
-        comp_nocs = (weights[..., None] * nocs).sum(dim=-2)
+        comp_nocs = (weights.unsqueeze(-1) * nocs).sum(dim=-2)
         # return comp_rgb, acc, weights, comp_nocs
     else:
         # return comp_rgb, acc, weights, depth
@@ -496,9 +496,9 @@ def volumetric_rendering_with_seg(rgb, density, t_vals, dirs, white_bkgd, seg, n
 
     weights = alpha * accum_prod
 
-    comp_rgb = (weights[..., None] * rgb).sum(dim=-2)
+    comp_rgb = (weights.unsqueeze(-1) * rgb).sum(dim=-2)
 
-    comp_seg = (weights[..., None] * seg).sum(dim=-2)
+    comp_seg = (weights.unsqueeze(-1) * seg).sum(dim=-2)
 
     # mask rgb with rendered seg
 
@@ -515,10 +515,10 @@ def volumetric_rendering_with_seg(rgb, density, t_vals, dirs, white_bkgd, seg, n
     inv_eps = 1 / eps
 
     if white_bkgd:
-        comp_rgb = comp_rgb + (1.0 - acc[..., None])
+        comp_rgb = comp_rgb + (1.0 - acc.unsqueeze(-1))
 
     if nocs is not None:
-        comp_nocs = (weights[..., None] * nocs).sum(dim=-2)
+        comp_nocs = (weights.unsqueeze(-1) * nocs).sum(dim=-2)
         # return comp_rgb, acc, weights, comp_nocs
     else:
         # return comp_rgb, acc, weights, depth
@@ -575,13 +575,13 @@ def sorted_piecewise_constant_pdf(
         u = torch.linspace(0.0, 1.0 - float_min_eps, num_samples, device=cdf.device)
         u = torch.broadcast_to(u, list(cdf.shape[:-1]) + [num_samples])
 
-    mask = u[..., None, :] >= cdf[..., :, None]
+    mask = u.unsqueeze(1) >= cdf.unsqueeze(-1)
 
-    bin0 = (mask * bins[..., None] + ~mask * bins[..., :1, None]).max(dim=-2)[0]
-    bin1 = (~mask * bins[..., None] + mask * bins[..., -1:, None]).min(dim=-2)[0]
+    bin0 = (mask * bins.unsqueeze(-1) + ~mask * bins[:, :1].unsqueeze(-1)).max(dim=-2)[0] # lower bound?
+    bin1 = (~mask * bins.unsqueeze(-1) + mask * bins[:, -1:].unsqueeze(-1)).min(dim=-2)[0] # upper bound?
     # Debug Here
-    cdf0 = (mask * cdf[..., None] + ~mask * cdf[..., :1, None]).max(dim=-2)[0]
-    cdf1 = (~mask * cdf[..., None] + mask * cdf[..., -1:, None]).min(dim=-2)[0]
+    cdf0 = (mask * cdf.unsqueeze(-1) + ~mask * cdf[..., :1].unsqueeze(-1)).max(dim=-2)[0]
+    cdf1 = (~mask * cdf.unsqueeze(-1) + mask * cdf[..., -1:].unsqueeze(-1)).min(dim=-2)[0]
 
     t = torch.clip(torch.nan_to_num((u - cdf0) / (cdf1 - cdf0), 0), 0, 1)
     samples = bin0 + t * (bin1 - bin0)
@@ -611,3 +611,14 @@ def generate_samples(x_limits, y_limits, z_limits, num_samples):
     samples = torch.stack([X.flatten(), Y.flatten(), Z.flatten()], dim=1)
 
     return samples
+
+def get_voxel_centers(x_lim, y_lim, z_lim, x_voxels, y_voxels, z_voxels):
+    x_step = (x_lim[1] - x_lim[0]) / x_voxels
+    y_step = (y_lim[1] - y_lim[0]) / y_voxels
+    z_step = (z_lim[1] - z_lim[0]) / z_voxels
+
+    x_centers = torch.linspace(x_lim[0] + x_step / 2, x_lim[1] - x_step / 2, x_voxels)
+    y_centers = torch.linspace(y_lim[0] + y_step / 2, y_lim[1] - y_step / 2, y_voxels)
+    z_centers = torch.linspace(z_lim[0] + z_step / 2, z_lim[1] - z_step / 2, z_voxels)
+
+    return torch.meshgrid(x_centers, y_centers, z_centers)
