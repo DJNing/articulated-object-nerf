@@ -587,7 +587,8 @@ class NeRFSeg(nn.Module):
             density = self.sigma_activation(raw_density)
             seg = self.seg_activation(raw_seg)
             if self.one_hot_activation is not None:
-                seg = self.one_hot_activation(seg)
+                if not self.training:
+                    seg = self.one_hot_activation(seg)
             # render_dict = helper.volumetric_rendering_with_seg(
             #     rgb, 
             #     density,
@@ -1443,7 +1444,7 @@ class LitNeRFSegArt(LitModel):
     def __init__(
         self,
         hparams,
-        lr_init: float = 1.0e-3,
+        lr_init: float = 1.0e-1,
         lr_final: float = 5.0e-5,
         lr_delay_steps: int = 2500,
         lr_delay_mult: float = 0.01,
@@ -1461,7 +1462,7 @@ class LitNeRFSegArt(LitModel):
 
         if self.hparams.run_eval:
             # ckpt_path = self.hparams.cktp_path
-            helper.load_state_dict_and_report(self, self.hparams.cktp_path)
+            helper.load_state_dict_and_report(self, self.hparams.ckpt_path)
         else:
             # load pre-trained NeRF model
             if self.hparams.nerf_ckpt is not None:
@@ -1471,7 +1472,7 @@ class LitNeRFSegArt(LitModel):
         self.lr_final = self.hparams.lr_final
         self.art_list = []
         for _ in range(self.part_num - 1):
-            self.art_list += [ArticulationEstimation(perfect_init=True)]
+            self.art_list += [ArticulationEstimation(perfect_init=self.hparams.perfect_init)]
         
         if self.hparams.one_hot_loss:
             self.one_hot_loss = OneHotLoss()
@@ -1515,7 +1516,9 @@ class LitNeRFSegArt(LitModel):
                 "near": self.hparams.near,
                 "far": self.hparams.far,
             }
-            self.test_dataset = dataset(split="test_val", **kwargs_test)
+            self.test_dataset = dataset(split="test", **kwargs_test)
+            self.near = self.test_dataset.near
+            self.far = self.test_dataset.far
             self.white_bkgd = self.test_dataset.white_back
 
         else:
@@ -1694,8 +1697,8 @@ class LitNeRFSegArt(LitModel):
             # opa_loss_0 = bceloss(opa_max_0, opa_target.view(-1))
             # opa_loss_1 = bceloss(opa_max_1, opa_target.view(-1))
             
-            opa_loss_0 = F.l1_loss(opa_max_0, opa_target.view(-1))
-            opa_loss_1 = F.l1_loss(opa_max_1, opa_target.view(-1))
+            opa_loss_0 = F.mse_loss(opa_max_0, opa_target.view(-1))
+            opa_loss_1 = F.mse_loss(opa_max_1, opa_target.view(-1))
 
             def get_one_hot_loss(opa):
                 '''
@@ -1717,7 +1720,8 @@ class LitNeRFSegArt(LitModel):
             self.log("train/one_hot_loss_0", one_hot_loss_0, on_step=True, logger=True)
             self.log("train/one_hot_loss_1", one_hot_loss_1, on_step=True, logger=True)
 
-            loss = loss0 + loss1 + 0.1*(opa_loss_0 + opa_loss_1) + 0.001*(one_hot_loss_0 + one_hot_loss_1)
+            # loss = loss0 + loss1 + 0.1*(opa_loss_0 + opa_loss_1) + 0.001*(one_hot_loss_0 + one_hot_loss_1)
+            loss = loss0 + loss1 + (opa_loss_0 + opa_loss_1)
 
         else:
             rgb_coarse = rendered_results['level_0']['rgb_seg']
@@ -1802,7 +1806,7 @@ class LitNeRFSegArt(LitModel):
 
             mean_dist = 0.5*(density_c*dist_c).abs().mean() + 0.5*(density_f * dist_f).abs().mean()
             self.log("train/dist_reg", mean_dist, on_step=True)
-            loss += 0.1*mean_dist
+            loss += 0.01*mean_dist
 
 
         if self.hparams.use_bg_reg:
@@ -2157,6 +2161,37 @@ class LitNeRFSegArt(LitModel):
         #     key = 'part_' + str(i+1)
         #     self.logger.log(key+"_origin", origin)
         #     self.logger.log(key+"_Q", Q)
+        if self.hparams.scan_density:
+            torch.cuda.empty_cache()
+            save_dir = 'visualization'
+
+            scan_dict = self.scan_density()
+            f_seg = scan_dict['f_seg_results']
+            f_seg_0 = scan_dict['f_seg_results'][:,:,0:1]
+            f_seg_0[f_seg_0 < 0.5] = 0
+            f_seg_0[f_seg_0 >= 0.5] = 1
+            f_seg_1 = scan_dict['f_seg_results'][:,:,1:2]
+            f_seg_1[f_seg_1 < 0.5] = 0
+            f_seg_1[f_seg_1 >= 0.5] = 1
+            f_den = scan_dict['f_density_results']
+            seg_den_f_part_0 = f_den * f_seg_0
+            seg_den_f_part_1 = f_den * f_seg_1
+            # seg_den_c_part_0 = scan_dict['c_density_results'] * scan_dict['c_seg_results'][:,:,0:1]
+            # seg_den_c_part_1 = scan_dict['c_density_results'] * scan_dict['c_seg_results'][:,:,1:2]
+            samples = scan_dict['samples']
+            mask_0 = seg_den_f_part_0 > 0
+            mask_1 = seg_den_f_part_1 > 0
+            pts0 = samples[mask_0.view(-1)].cpu().numpy()
+            pts1 = samples[mask_1.view(-1)].cpu().numpy()
+            import open3d as o3d
+            def save_ply(pts, save_name):
+                pcd = o3d.geometry.PointCloud()
+                pcd.points = o3d.utility.Vector3dVector(pts)
+                o3d.io.write_point_cloud(save_name, pcd)
+            save_ply(pts0, save_dir + '/%d_part0.ply'%self.current_epoch)
+            save_ply(pts1, save_dir + '/%d_part1.ply'%self.current_epoch)
+        
+        torch.cuda.empty_cache()
         return
     
     def scan_density(self):
@@ -2166,9 +2201,10 @@ class LitNeRFSegArt(LitModel):
         fine_mlp = self.model.fine_mlp
         samples = samples.to(self.model.coarse_mlp.density_layer.weight)
         samples_enc = helper.pos_enc(samples, 0, 10)
+        view_enc = helper.pos_enc(samples, 0, 4)
         forward_dict = {
             'x': samples_enc,
-            'condition': samples_enc,
+            'condition': view_enc,
             'part_code': None,
             'pos_raw': samples
         }
@@ -2179,7 +2215,7 @@ class LitNeRFSegArt(LitModel):
 
     def split_scan(self, forward_dict, coarse_mlp, fine_mlp):
         N = forward_dict['x'].shape[0]
-        chunk_size = self.hparams.forward_chunk * 64
+        chunk_size = self.hparams.forward_chunk
         c_density_results = []
         c_seg_results = []
         f_density_results = []
@@ -2189,19 +2225,19 @@ class LitNeRFSegArt(LitModel):
             start_idx = i
             end_idx = min(i + chunk_size, N)
             minibatch_data = {
-                "x": forward_dict["rays_o"][start_idx:end_idx],
-                "condition": forward_dict["rays_d"][start_idx:end_idx],
+                "x": forward_dict["x"][start_idx:end_idx].unsqueeze(1),
+                "condition": forward_dict["condition"][start_idx:end_idx],
                 "part_code": None,
-                "pos_raw": forward_dict["pos_raw"][start_idx:end_idx]
+                "pos_raw": forward_dict["pos_raw"][start_idx:end_idx].unsqueeze(1)
             }
             coarse_result = coarse_mlp(**minibatch_data)
             fine_result = fine_mlp(**minibatch_data)
 
-            density_c = coarse_result['density']
-            density_f = fine_result['density']
+            density_c = self.model.sigma_activation(coarse_result['raw_density'])
+            density_f = self.model.sigma_activation(fine_result['raw_density'])
 
-            seg_c = coarse_result['seg']
-            seg_f = fine_result['seg']
+            seg_c = self.model.seg_activation(coarse_result['raw_seg'])
+            seg_f = self.model.seg_activation(fine_result['raw_seg'])
 
             c_density_results += [density_c]
             c_seg_results += [seg_c]
@@ -2213,7 +2249,8 @@ class LitNeRFSegArt(LitModel):
             'f_density_results': torch.cat(f_density_results, dim=0),
             'f_seg_results': torch.cat(f_seg_results, dim=0),
             'c_density_results': torch.cat(c_density_results, dim=0),
-            'c_seg_results': torch.cat(c_seg_results, dim=0)
+            'c_seg_results': torch.cat(c_seg_results, dim=0),
+            'samples': forward_dict['pos_raw']
         }
         return ret_dict
 
@@ -2246,8 +2283,9 @@ class LitNeRFSegArt(LitModel):
             batch[k] = v.squeeze(0)
         
         if self.hparams.scan_density:
-            pass
-            ret_dict = {}
+            # ret_dict = self.scan_density()
+            # ret_dict = {}
+            return 0
         else:
             img_list = self.render_img(batch)
             final_img = torch.cat(img_list, dim=0).sum(dim=0).view([-1, 3])
@@ -2265,8 +2303,38 @@ class LitNeRFSegArt(LitModel):
 
     def test_epoch_end(self, outputs):
         if self.hparams.scan_density:
-            pass
-            return
+
+            save_dir = 'visualization'
+
+            scan_dict = self.scan_density()
+
+            seg_den_f_part_0 = scan_dict['f_density_results'] * scan_dict['f_seg_results'][:,:,0:1]
+            seg_den_f_part_1 = scan_dict['f_density_results'] * scan_dict['f_seg_results'][:,:,1:2]
+            # seg_den_c_part_0 = scan_dict['c_density_results'] * scan_dict['c_seg_results'][:,:,0:1]
+            # seg_den_c_part_1 = scan_dict['c_density_results'] * scan_dict['c_seg_results'][:,:,1:2]
+            samples = scan_dict['samples']
+            mask_0 = seg_den_f_part_0 > 0
+            mask_1 = seg_den_f_part_1 > 0
+            pts0 = samples[mask_0.view(-1)].cpu().numpy()
+            pts1 = samples[mask_1.view(-1)].cpu().numpy()
+            import open3d as o3d
+            def save_ply(pts, save_name):
+                pcd = o3d.geometry.PointCloud()
+                pcd.points = o3d.utility.Vector3dVector(pts)
+                o3d.io.write_point_cloud(save_name, pcd)
+            
+            save_ply(pts0, save_dir + '/part0.ply')
+            save_ply(pts1, save_dir + '/part1.ply')
+
+            # for k, v in scan_dict.items():
+            #     if 'seg' in k:
+            #         v = v.cpu().to(torch.int8).numpy()
+            #     else:
+            #         v = v.cpu().to(torch.float).numpy()
+            #     fname = k + '.npy'
+            #     save_name = save_dir + '/' + fname
+            #     np.save(save_name, v)
+            return 0
         else:
             psnr = sum(ret['psnr'] for ret in outputs) / len(outputs)
             self.log("test/psnr", psnr, on_epoch=True)
