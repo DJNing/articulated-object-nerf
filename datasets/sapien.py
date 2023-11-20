@@ -405,7 +405,7 @@ class SapienArtSegDataset(SapienDataset):
             self.sample_list = []
         self.use_sample_list = False
         self.near = 2.0
-        self.far = 6.0
+        self.far = 7.0
         
         self.split = split
         # if split == 'train':

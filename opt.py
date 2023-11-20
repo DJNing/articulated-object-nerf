@@ -234,6 +234,8 @@ def get_parser():
     parser.add_argument('--rgb_activation', type=bool, default=False, help="whether to use rgb_activation")
     parser.add_argument('--scan_density', type=bool, default=False, help="whether to scan the nerf space to save density for visualization")
     parser.add_argument('--grid_num', type=int, default=256, help="number of grids used for density scan")
+    parser.add_argument('--near', type=int, default=2, help="near plane")
+    parser.add_argument('--far', type=int, default=9, help="far plane")
     return parser
 
 def get_opts():
