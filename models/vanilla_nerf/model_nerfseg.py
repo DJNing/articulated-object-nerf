@@ -1485,19 +1485,25 @@ class LitNeRFSegArt(LitModel):
 
     def setup(self, stage: Optional[str] = None) -> None:
         dataset = dataset_dict[self.hparams.dataset_name]
-
+        
+        self.near = self.hparams.near
+        self.far = self.hparams.far
         kwargs_train = {
             "root_dir": self.hparams.root_dir,
             "img_wh": tuple(self.hparams.img_wh),
             "white_back": self.hparams.white_back,
             "model_type": "vailla_nerf",
             "record_hard_sample": self.hparams.record_hard_sample,
+            "near": self.hparams.near,
+            "far": self.hparams.far,
         }
         kwargs_val = {
             "root_dir": self.hparams.root_dir,
             "img_wh": tuple(self.hparams.img_wh),
             "white_back": self.hparams.white_back,
             "model_type": "vanilla_nerf",
+            "near": self.hparams.near,
+            "far": self.hparams.far,
         }
         
         if self.hparams.run_eval:
@@ -1507,6 +1513,8 @@ class LitNeRFSegArt(LitModel):
                 "white_back": self.hparams.white_back,
                 "model_type": "vanilla_nerf",
                 "eval_inference": self.hparams.render_name,
+                "near": self.hparams.near,
+                "far": self.hparams.far,
             }
             self.test_dataset = dataset(split="test", **kwargs_test)
             self.near = self.test_dataset.near
@@ -1516,8 +1524,6 @@ class LitNeRFSegArt(LitModel):
         else:
             self.train_dataset = dataset(split="train", **kwargs_train)
             self.val_dataset = dataset(split="val", **kwargs_val)
-            self.near = self.train_dataset.near
-            self.far = self.train_dataset.far
             self.white_bkgd = self.train_dataset.white_back
             # self.criterion = nn.CrossEntropyLoss(reduction='mean')
             self.criterion = CalculateSegLoss(self.hparams.seg_mode)

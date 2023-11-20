@@ -262,11 +262,18 @@ def gen_articulated_object_nerf_s1(num_pos_img, radius_, split, camera, asset, s
 
 def gen_articulated_object_nerf_s2(num_pos_img, radius_, split, camera, asset, scene, object_path, \
                                    camera_mount_actor=None, theta_range = [0*math.pi, 2*math.pi], \
-                                    phi_range = [0*math.pi, 1*math.pi], render_pose_file_dir = None):
+                                    phi_range = [0*math.pi, 1*math.pi], render_pose_file_dir = None, q_pos=None):
     
     with_seg=True
     dof = asset.dof
-    asset.set_qpos([np.inf] * dof)
+    if q_pos is not None:
+        asset.set_qpos(q_pos)
+    elif dof > 1:
+        q_pos = [-np.inf] * dof
+        q_pos[0] = np.inf
+        asset.set_qpos(q_pos)
+    else:
+        asset.set_qpos([np.inf] * dof)
     if split is not None:
         save_base_path = object_path / split
     else:
@@ -538,7 +545,7 @@ def render_img_with_pose(pose, save_path, camera_mount_actor, scene, camera, ass
     return ret_dict
 
 
-def generate_art_imgs(output_dir, split, index_list, scene_dict, num_imgs, pose_dict=None, reuse_pose=False):
+def generate_art_imgs(output_dir, split, index_list, scene_dict, num_imgs, radius=5, pose_dict=None, reuse_pose=False):
     """
     Generate and save files into the specified directory structure for a single split.
 
@@ -576,7 +583,7 @@ def generate_art_imgs(output_dir, split, index_list, scene_dict, num_imgs, pose_
     
     for i in range(num_imgs):
         frame_id = 'r_' + str(i)
-        point = random_point_in_sphere(radius=5)
+        point = random_point_in_sphere(radius=radius)
         mat44 = calculate_cam_ext(point)
         pose_dict[frame_id] = mat44
 
@@ -610,7 +617,7 @@ def generate_art_imgs(output_dir, split, index_list, scene_dict, num_imgs, pose_
             fname = frame_id + '.png'
             if pose_dict is None:
                 if not reuse_pose:
-                    point = random_point_in_sphere(radius=5)
+                    point = random_point_in_sphere(radius=radius)
                     mat44 = calculate_cam_ext(point)
                     scene_dict['pose'] = mat44
                 else:

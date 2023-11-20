@@ -611,7 +611,7 @@ class LitNeRF(LitModel):
             self.train_dataset,
             shuffle=True,
             num_workers=2,
-            batch_size=2048,
+            batch_size=self.hparams.ray_batch,
             pin_memory=True,
         )
 
