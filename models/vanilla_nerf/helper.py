@@ -74,8 +74,8 @@ def cast_rays(t_vals, origins, directions):
     return origins[..., None, :] + t_vals.unsqueeze(-1) * directions[..., None, :]
 
 
-def get_ray_limits(rays_o: torch.Tensor, rays_d: torch.Tensor, box_side_length=2):
-    batch_near, batch_far = get_ray_limits_box(
+def get_ray_lim(rays_o: torch.Tensor, rays_d: torch.Tensor, box_side_length=2):
+    batch_near, batch_far = get_ray_lim_box(
         rays_o, rays_d, box_side_length=box_side_length
     )
     is_ray_valid = batch_far > batch_near
@@ -87,7 +87,7 @@ def get_ray_limits(rays_o: torch.Tensor, rays_d: torch.Tensor, box_side_length=2
     return batch_near, batch_far
 
 
-def get_ray_limits_box(rays_o: torch.Tensor, rays_d: torch.Tensor, box_side_length):
+def get_ray_lim_box(rays_o: torch.Tensor, rays_d: torch.Tensor, box_side_length):
     """
     Author: Petr Kellnhofer
     Intersects rays with the [-1, 1] NDC volume.
@@ -598,10 +598,10 @@ def sample_pdf(bins, weights, origins, directions, t_vals, num_samples, randomiz
     return t_vals, coords
 
 
-def generate_samples(x_limits, y_limits, z_limits, num_samples):
+def generate_samples(x_lim, y_lim, z_limits, num_samples):
     # Generate 1D tensors for each axis
-    x_values = torch.linspace(x_limits[0], x_limits[1], num_samples[0])
-    y_values = torch.linspace(y_limits[0], y_limits[1], num_samples[1])
+    x_values = torch.linspace(x_lim[0], x_lim[1], num_samples[0])
+    y_values = torch.linspace(y_lim[0], y_lim[1], num_samples[1])
     z_values = torch.linspace(z_limits[0], z_limits[1], num_samples[2])
 
     # Create a 3D grid using torch.meshgrid
@@ -612,13 +612,29 @@ def generate_samples(x_limits, y_limits, z_limits, num_samples):
 
     return samples
 
-def get_voxel_centers(x_lim, y_lim, z_lim, x_voxels, y_voxels, z_voxels):
-    x_step = (x_lim[1] - x_lim[0]) / x_voxels
-    y_step = (y_lim[1] - y_lim[0]) / y_voxels
-    z_step = (z_lim[1] - z_lim[0]) / z_voxels
+# def get_voxel_centers(x_lim, y_lim, z_lim, x_voxels, y_voxels, z_voxels):
+#     # x_step = (x_lim[1] - x_lim[0]) / x_voxels
+#     # y_step = (y_lim[1] - y_lim[0]) / y_voxels
+#     # z_step = (z_lim[1] - z_lim[0]) / z_voxels
 
-    x_centers = torch.linspace(x_lim[0] + x_step / 2, x_lim[1] - x_step / 2, x_voxels)
-    y_centers = torch.linspace(y_lim[0] + y_step / 2, y_lim[1] - y_step / 2, y_voxels)
-    z_centers = torch.linspace(z_lim[0] + z_step / 2, z_lim[1] - z_step / 2, z_voxels)
+#     # x_centers = torch.linspace(x_lim[0] + x_step / 2, x_lim[1] - x_step / 2, x_voxels)
+#     # y_centers = torch.linspace(y_lim[0] + y_step / 2, y_lim[1] - y_step / 2, y_voxels)
+#     # z_centers = torch.linspace(z_lim[0] + z_step / 2, z_lim[1] - z_step / 2, z_voxels)
+#     x_values = torch.linspace(x_lim[0], x_lim[1], num_samples_x)
+#     y_values = torch.linspace(y_lim[0], y_lim[1], num_samples_y)
+#     z_values = torch.linspace(z_limits[0], z_limits[1], num_samples_z)
 
-    return torch.meshgrid(x_centers, y_centers, z_centers)
+#     # Create a grid of positions using Cartesian product
+#     positions = torch.cartesian_prod(x_values, y_values, z_values)
+#     return torch.meshgrid(x_centers, y_centers, z_centers)
+
+def get_voxel_centers(x_limits, y_limits, z_limits, num_samples_x, num_samples_y, num_samples_z):
+    # Generate evenly spaced values along each axis
+    x_values = torch.linspace(x_limits[0], x_limits[1], num_samples_x)
+    y_values = torch.linspace(y_limits[0], y_limits[1], num_samples_y)
+    z_values = torch.linspace(z_limits[0], z_limits[1], num_samples_z)
+
+    # Create a grid of positions using Cartesian product
+    positions = torch.cartesian_prod(x_values, y_values, z_values)
+
+    return positions

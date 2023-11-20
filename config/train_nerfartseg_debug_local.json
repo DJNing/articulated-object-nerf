@@ -1,7 +1,7 @@
 {
     "dataset_name": "sapien_artseg",
     "root_dir": "data/laptop_10211_art_seg",
-    "exp_name": "rgb_loss_perfect_init_one_hot_act_res_raw_new_render_sample",
+    "exp_name": "composite_rendering_opa_loss",
     "exp_type": "nerf_artseg",
     "img_wh": [640, 480],
     "white_back": false,
@@ -19,7 +19,9 @@
     "include_bg": false,
     "lr_final": 1e-4,
     "use_seg_module": false,
-    "use_dist_reg": false,
+    "use_dist_reg": true,
     "use_bg_reg": false,
-    "composite_rendering": false
+    "composite_rendering": true,
+    "scan_density": true,
+    "perfect_init": false
 }
