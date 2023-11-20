@@ -1,9 +1,0 @@
-{
-    "urdf_file": "/disk/nfs/gazinasvolume2/s2262444/full_sapien/dataset/103111/mobility.urdf",
-    "output_dir": "data/stapler_103111/",
-    "resolution": [640, 480],
-    "with_seg": true,
-    "save_render_pose_path": "data/stapler_103111_pose",
-    "art_seg_data": false,
-    "radius": 6
-}

@@ -1,7 +1,0 @@
-{
-    "urdf_file": "data_base/laptop/10211/mobility.urdf",
-    "output_dir": "data/laptop_10211_art_seg/",
-    "resolution": [640, 480],
-    "with_seg": true,
-    "art_seg_data": true
-}
