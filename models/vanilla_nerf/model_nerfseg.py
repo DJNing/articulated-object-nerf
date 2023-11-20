@@ -2187,9 +2187,8 @@ class LitNeRFSegArt(LitModel):
                 pcd = o3d.geometry.PointCloud()
                 pcd.points = o3d.utility.Vector3dVector(pts)
                 o3d.io.write_point_cloud(save_name, pcd)
-            
-            save_ply(pts0, save_dir + '/part0.ply')
-            save_ply(pts1, save_dir + '/part1.ply')
+            save_ply(pts0, save_dir + '/%d_part0.ply'%self.current_epoch)
+            save_ply(pts1, save_dir + '/%d_part1.ply'%self.current_epoch)
         
         torch.cuda.empty_cache()
         return
