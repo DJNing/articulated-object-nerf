@@ -2188,8 +2188,12 @@ class LitNeRFSegArt(LitModel):
                 pcd = o3d.geometry.PointCloud()
                 pcd.points = o3d.utility.Vector3dVector(pts)
                 o3d.io.write_point_cloud(save_name, pcd)
-            save_ply(pts0, save_dir + '/%d_part0.ply'%self.current_epoch)
-            save_ply(pts1, save_dir + '/%d_part1.ply'%self.current_epoch)
+            if self.sanity_check:
+                save_ply(pts0, save_dir + '/sanity_part0.ply')
+                save_ply(pts1, save_dir + '/sanity_part1.ply')
+            else:
+                save_ply(pts0, save_dir + '/%d_part0.ply'%self.current_epoch)
+                save_ply(pts1, save_dir + '/%d_part1.ply'%self.current_epoch)
         
         torch.cuda.empty_cache()
         return
@@ -2200,11 +2204,11 @@ class LitNeRFSegArt(LitModel):
         coarse_mlp = self.model.coarse_mlp
         fine_mlp = self.model.fine_mlp
         samples = samples.to(self.model.coarse_mlp.density_layer.weight)
-        samples_enc = helper.pos_enc(samples, 0, 10)
-        view_enc = helper.pos_enc(samples, 0, 4)
+        # samples_enc = helper.pos_enc(samples, 0, 10)
+        # view_enc = helper.pos_enc(samples, 0, 4)
         forward_dict = {
-            'x': samples_enc,
-            'condition': view_enc,
+            # 'x': samples_enc,
+            # 'condition': view_enc,
             'part_code': None,
             'pos_raw': samples
         }
@@ -2214,7 +2218,7 @@ class LitNeRFSegArt(LitModel):
         return scan_dict
 
     def split_scan(self, forward_dict, coarse_mlp, fine_mlp):
-        N = forward_dict['x'].shape[0]
+        N = forward_dict['pos_raw'].shape[0]
         chunk_size = self.hparams.forward_chunk
         c_density_results = []
         c_seg_results = []
@@ -2224,11 +2228,14 @@ class LitNeRFSegArt(LitModel):
             # Get a minibatch of data
             start_idx = i
             end_idx = min(i + chunk_size, N)
+            split_samples = forward_dict['pos_raw'][start_idx:end_idx]
+            split_x = helper.pos_enc(split_samples, 0, 10)
+            split_view = helper.pos_enc(split_samples, 0, 4)
             minibatch_data = {
-                "x": forward_dict["x"][start_idx:end_idx].unsqueeze(1),
-                "condition": forward_dict["condition"][start_idx:end_idx],
+                "x": split_x.unsqueeze(1),
+                "condition": split_view,
                 "part_code": None,
-                "pos_raw": forward_dict["pos_raw"][start_idx:end_idx].unsqueeze(1)
+                "pos_raw": split_samples.unsqueeze(1)
             }
             coarse_result = coarse_mlp(**minibatch_data)
             fine_result = fine_mlp(**minibatch_data)

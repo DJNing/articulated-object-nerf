@@ -163,7 +163,7 @@ class SapienDataset(Dataset):
 
 
 class SapienStaticSegDataset(SapienDataset):
-    def __init__(self, root_dir, split='train', img_wh=(320, 240), model_type=None, white_back=None, eval_inference=None):
+    def __init__(self, root_dir, split='train', img_wh=(320, 240), model_type=None, white_back=None, eval_inference=None, near=2.0, far=6.0):
         # super().__init__(root_dir, split, img_wh, model_type, white_back, eval_inference)
         self.root_dir = root_dir
         self.split = split
@@ -174,8 +174,8 @@ class SapienStaticSegDataset(SapienDataset):
         self.num_img = None
         self.num_art = None
         
-        self.near = 2.0
-        self.far = 6.0
+        self.near = near
+        self.far = far
         
         self.bounds = np.array([self.near, self.far])
         self.dataset_path = P(self.root_dir) / split
@@ -312,14 +312,14 @@ class SapienPartDataset(SapienDataset):
         2. Object articulation status and type
         3. Segment mask for evaluation
     '''
-    def __init__(self, root_dir, split='train', img_wh=(320, 240), model_type=None, white_back=None, eval_inference=None):
+    def __init__(self, root_dir, split='train', img_wh=(320, 240), model_type=None, white_back=None, eval_inference=None, near=2.0, far=6.0):
         super().__init__(root_dir, split, img_wh, model_type, white_back, eval_inference)
         self.meta_dict = {}
         self.num_img = None
         self.num_art = None
         
-        self.near = 2.0
-        self.far = 6.0
+        self.near = near
+        self.far = far
         
         self.bounds = np.array([self.near, self.far])
         self.read_meta()
@@ -392,7 +392,7 @@ class SapienArtSegDataset(SapienDataset):
 
     def __init__(self, root_dir, split='train', img_wh=(320, 240), 
                  model_type=None, white_back=None, eval_inference=None,
-                 record_hard_sample=False):
+                 record_hard_sample=False, near=2.0, far=6.0):
         # super().__init__(root_dir, split, img_wh, model_type, white_back, eval_inference)
         self.root_dir = root_dir
         self.img_wh = img_wh
@@ -404,8 +404,8 @@ class SapienArtSegDataset(SapienDataset):
         if self.record_hard_sample:
             self.sample_list = []
         self.use_sample_list = False
-        self.near = 2.0
-        self.far = 7.0
+        self.near = near
+        self.far = far
         
         self.split = split
         # if split == 'train':
