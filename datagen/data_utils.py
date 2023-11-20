@@ -262,11 +262,13 @@ def gen_articulated_object_nerf_s1(num_pos_img, radius_, split, camera, asset, s
 
 def gen_articulated_object_nerf_s2(num_pos_img, radius_, split, camera, asset, scene, object_path, \
                                    camera_mount_actor=None, theta_range = [0*math.pi, 2*math.pi], \
-                                    phi_range = [0*math.pi, 1*math.pi], render_pose_file_dir = None):
+                                    phi_range = [0*math.pi, 1*math.pi], render_pose_file_dir = None, q_pos=None):
     
     with_seg=True
     dof = asset.dof
-    if dof > 1:
+    if q_pos is not None:
+        asset.set_qpos(q_pos)
+    elif dof > 1:
         q_pos = [-np.inf] * dof
         q_pos[0] = np.inf
         asset.set_qpos(q_pos)

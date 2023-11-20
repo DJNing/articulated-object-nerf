@@ -106,7 +106,7 @@ def get_parser():
     #                     help='chunk size to split the input to avoid OOM')
     parser.add_argument('--num_epochs', type=int, default=80,
                         help='number of training epochs')
-    parser.add_argument('--num_gpus', type=int, default=1,
+    parser.add_argument('--num_gpus', nargs="+", type=int, default=1,
                         help='number of gpus')
 
     parser.add_argument('--run_max_steps', type=int, default=100000,

@@ -20,6 +20,7 @@ def parse_args():
     parser.add_argument("--with_seg", type=bool, default=False, help="whether to save seg image with NeRF training data")
     parser.add_argument("--art_seg_data", type=bool, default=False, help="whether to set all qpos to their upper limit")
     parser.add_argument("--radius", type=int, default=4, help="camera distance to the origin")
+    parser.add_argument("--q_pos", type=float, nargs="+", default=None, help="specify q_pos to the object")
     # Load and parse the JSON configuration file
     with open(args.config, "r") as config_file:
         config_data = json.load(config_file)
@@ -72,7 +73,7 @@ def main(args):
 
     output_path = P(args.output_dir)
     output_path.mkdir(exist_ok=True, parents=True)
-
+    qpos = args.q_pos
     if args.gen_art_imgs:
         
         qpos_list = np.arange(10)
@@ -99,11 +100,11 @@ def main(args):
     elif args.art_seg_data:
         # set qpos to max
         gen_articulated_object_nerf_s2(30, args.radius, 'train', camera, asset, scene, object_path=output_path, \
-                                       render_pose_file_dir=args.save_render_pose_path)
+        render_pose_file_dir=args.save_render_pose_path, q_pos=qpos)
         gen_articulated_object_nerf_s2(20, args.radius, 'val', camera, asset, scene, object_path=output_path, \
-                                       render_pose_file_dir=args.save_render_pose_path)
+        render_pose_file_dir=args.save_render_pose_path, q_pos=qpos)
         generate_articulation_test(50, args.radius, 'test', camera, asset, scene, object_path=output_path, \
-                                   render_pose_file_dir=args.save_render_pose_path)
+        render_pose_file_dir=args.save_render_pose_path)
     else:
         
         splits = ('train', 'test', 'val')
@@ -113,13 +114,13 @@ def main(args):
         # gen_articulated_object_nerf_s1(50, 4, 'test', camera, asset, scene, object_path=output_path, render_pose_file_dir=args.save_render_pose_path, with_seg=args.with_seg)
         # print("generating images for testing...")
         # gen_articulated_object_nerf_s1(50, 4, 'val', camera, asset, scene, object_path=output_path, render_pose_file_dir=args.save_render_pose_path, with_seg=args.with_seg)
-
+        
         gen_articulated_object_nerf_s2(120, args.radius, 'train', camera, asset, scene, object_path=output_path, \
-                                       render_pose_file_dir=args.save_render_pose_path)
+        render_pose_file_dir=args.save_render_pose_path, q_pos=qpos)
         gen_articulated_object_nerf_s2(50, args.radius, 'val', camera, asset, scene, object_path=output_path, \
-                                       render_pose_file_dir=args.save_render_pose_path)
+        render_pose_file_dir=args.save_render_pose_path, q_pos=qpos)
         gen_articulated_object_nerf_s2(50, args.radius, 'test', camera, asset, scene, object_path=output_path, \
-                                       render_pose_file_dir=args.save_render_pose_path)
+        render_pose_file_dir=args.save_render_pose_path, q_pos=qpos)
 
 if __name__ == "__main__":
     args = parse_args()
