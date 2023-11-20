@@ -73,7 +73,7 @@ def main(args):
 
     output_path = P(args.output_dir)
     output_path.mkdir(exist_ok=True, parents=True)
-    qpos = args.q_pos
+    qpos = getattr(args, 'q_pos', None)
     if args.gen_art_imgs:
         
         qpos_list = np.arange(10)

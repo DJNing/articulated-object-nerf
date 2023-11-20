@@ -2097,6 +2097,7 @@ class LitNeRFSegArt(LitModel):
         
         psnr = sum(ret['psnr'] for ret in outputs) / len(outputs)
         self.log("val/psnr", psnr, on_epoch=True)
+        
         if self.hparams.composite_rendering:
             W, H = self.hparams.img_wh
             def toPIL(tensor, h, w, c=3):
