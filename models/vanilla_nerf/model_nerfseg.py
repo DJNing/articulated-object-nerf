@@ -1779,28 +1779,24 @@ class LitNeRFSegArt(LitModel):
 
             rgb_coarse = rgb_coarse.view([-1, ray_num, 3]).sum(dim=0)
             rgb_fine = rgb_fine.view([-1, ray_num, 3]).sum(dim=0)
+            
+            if self.hparams.record_hard_sample:
+                if not self.train_dataset.use_sample_list:
+                    loss0_dict = self._calculate_loss_and_record_sample(rgb_coarse, rgb_target, batch['idx'])
+                    loss1_dict = self._calculate_loss_and_record_sample(rgb_fine, rgb_target, batch['idx'])
+                    loss0 = loss0_dict['loss']
+                    loss1 = loss1_dict['loss']
+                    sample_0 = loss0_dict['hard_samples']
+                    sample_1 = loss1_dict['hard_samples']
+                    samples = torch.cat((sample_0, sample_1)).unique()
+                    self.train_dataset.sample_list += [samples]
 
-            loss0 = helper.img2mse(rgb_coarse, rgb_target)
-            loss1 = helper.img2mse(rgb_fine, rgb_target)
-
-            loss = loss0 + loss1
-        if self.hparams.record_hard_sample:
-            if not self.train_dataset.use_sample_list:
-                loss0_dict = self._calculate_loss_and_record_sample(rgb_coarse, rgb_target, batch['idx'])
-                loss1_dict = self._calculate_loss_and_record_sample(rgb_fine, rgb_target, batch['idx'])
-                loss0 = loss0_dict['loss']
-                loss1 = loss1_dict['loss']
-                sample_0 = loss0_dict['hard_samples']
-                sample_1 = loss1_dict['hard_samples']
-                samples = torch.cat((sample_0, sample_1)).unique()
-                self.train_dataset.sample_list += [samples]
+                    loss = loss0 + loss1
+            else:
+                loss0 = helper.img2mse(rgb_coarse, rgb_target)
+                loss1 = helper.img2mse(rgb_fine, rgb_target)
 
                 loss = loss0 + loss1
-        else:
-            loss0 = helper.img2mse(rgb_coarse, rgb_target)
-            loss1 = helper.img2mse(rgb_fine, rgb_target)
-
-            loss = loss0 + loss1
 
         psnr0 = helper.mse2psnr(loss0)
         psnr1 = helper.mse2psnr(loss1)
