@@ -237,6 +237,8 @@ def get_parser():
     parser.add_argument('--perfect_init', type=bool, default=False, help="initialize the pose estimation with ground truth")
     parser.add_argument('--near', type=int, default=2, help="near plane")
     parser.add_argument('--far', type=int, default=9, help="far plane")
+    parser.add_argument('--fine_level_loss_only', type=bool, default=False, help="whether we only fit with the fine-level loss")
+    parser.add_argument('--cluster_regularization', type=bool, default=False, help="whether to use regularization for training")
     return parser
 
 def get_opts():

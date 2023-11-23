@@ -27,7 +27,16 @@ torch.backends.cudnn.benchmark = False
 
 np.random.seed(0)
 random.seed(0)
-
+class Ellipsoid(nn.Module):
+    def __init__(self, rand_init=True) -> None:
+        super().__init__()
+        extent = torch.rand(3)
+        self.extent = nn.Parameter(extent, requires_grad=True)
+        
+    def forward(self, x):
+        
+        pass
+    
 class ArticulationEstimation(nn.Module):
     '''
     Current implemetation for revolute only
@@ -1694,8 +1703,6 @@ class LitNeRFSegArt(LitModel):
             bceloss = torch.nn.BCELoss()
             opa_max_0, _ = opa_part_0.max(dim=1)
             opa_max_1, _ = opa_part_1.max(dim=1)
-            # opa_loss_0 = bceloss(opa_max_0, opa_target.view(-1))
-            # opa_loss_1 = bceloss(opa_max_1, opa_target.view(-1))
             
             opa_loss_0 = F.mse_loss(opa_max_0, opa_target.view(-1))
             opa_loss_1 = F.mse_loss(opa_max_1, opa_target.view(-1))
@@ -1715,13 +1722,22 @@ class LitNeRFSegArt(LitModel):
             one_hot_loss_1 = get_one_hot_loss(opa_part_1)
 
 
-            self.log("train/opa_loss_0", opa_loss_0, on_step=True, logger=True)
-            self.log("train/opa_loss_1", opa_loss_1, on_step=True, logger=True)
             self.log("train/one_hot_loss_0", one_hot_loss_0, on_step=True, logger=True)
             self.log("train/one_hot_loss_1", one_hot_loss_1, on_step=True, logger=True)
 
             # loss = loss0 + loss1 + 0.1*(opa_loss_0 + opa_loss_1) + 0.001*(one_hot_loss_0 + one_hot_loss_1)
-            loss = loss0 + loss1 + (opa_loss_0 + opa_loss_1)
+            if self.hparams.fine_level_loss_only:
+                loss = loss1
+                
+                if self.hparams.use_opa_loss:
+                    loss += opa_loss_1
+                    self.log("train/opa_loss_1", opa_loss_1, on_step=True, logger=True)
+            else:
+                loss = loss1 + loss0
+                if self.hparams.use_opa_loss:
+                    loss = loss + (opa_loss_0 + opa_loss_1)
+                    self.log("train/opa_loss_0", opa_loss_0, on_step=True, logger=True)
+                    self.log("train/opa_loss_1", opa_loss_1, on_step=True, logger=True)
 
         else:
             rgb_coarse = rendered_results['level_0']['rgb_seg']
@@ -2115,8 +2131,8 @@ class LitNeRFSegArt(LitModel):
                 log_key = "val/sanity_check"
             else:
                 log_key = "val/results"
-            self.logger.log_image(key=log_key+'/gt', images=gt_list)
-            self.logger.log_image(key=log_key+'/pred', images=img_list)
+            self.logger.log_image(key=log_key+'/gt_%d'%self.local_rank, images=gt_list)
+            self.logger.log_image(key=log_key+'/pred_%d'%self.local_rank, images=img_list)
         else:
             log_idx = torch.randint(low=0, high=len(outputs), size=(1,))
             log_output = outputs[log_idx[0]]
@@ -2163,8 +2179,9 @@ class LitNeRFSegArt(LitModel):
         #     self.logger.log(key+"_Q", Q)
         if self.hparams.scan_density:
             torch.cuda.empty_cache()
-            save_dir = 'visualization'
-
+            save_dir = 'visualization/' + self.hparams.exp_name
+            from pathlib import Path as P
+            P(save_dir).mkdir(exist_ok=True)
             scan_dict = self.scan_density()
             f_seg = scan_dict['f_seg_results']
             f_seg_0 = scan_dict['f_seg_results'][:,:,0:1]
