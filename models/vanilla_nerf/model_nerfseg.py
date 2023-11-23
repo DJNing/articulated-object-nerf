@@ -1770,7 +1770,7 @@ class LitNeRFSegArt(LitModel):
                 self.log("train/opa_loss_1", opa_loss_1, on_step=True, logger=True)
 
             if self.hparams.use_cov_loss:
-                loss += total_cov
+                loss += self.hparams.cov_coef * total_cov
                 self.log("train/cov_loss", total_cov, on_step=True, logger=True)
 
         else:
