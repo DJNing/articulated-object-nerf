@@ -27,6 +27,16 @@ torch.backends.cudnn.benchmark = False
 
 np.random.seed(0)
 random.seed(0)
+
+class NonEmptyLoss(nn.Module):
+    def __init__(self, alpha) -> None:
+        super().__init__()
+        self.alpha = alpha
+    
+    def forward(self, x):
+        pass
+
+
 class Ellipsoid(nn.Module):
     def __init__(self, rand_init=True) -> None:
         super().__init__()
@@ -45,7 +55,7 @@ class ArticulationEstimation(nn.Module):
         super().__init__()
         if mode == 'qua':
             pass
-        elif mode == 'rad': #radian
+        elif mode == 'rad': # radian
             pass
         elif mode == 'deg': # degree
             pass
@@ -1600,23 +1610,23 @@ class LitNeRFSegArt(LitModel):
             if 'seg' in name:
                 seg_params += [param]
 
-        # art_params = []
-        # for art_est in self.art_list:
-        #     if art_est is not None:
-        #         for _, param in art_est.named_parameters():
-        #             param.requires_grad = True
-        #             art_params += [param]
+        art_params = []
+        for art_est in self.art_list:
+            if art_est is not None:
+                for _, param in art_est.named_parameters():
+                    param.requires_grad = True
+                    art_params += [param]
         seg_opt_dict = {
             'params': seg_params,
             'lr': self.lr_init
         }
 
-        # art_opt_dict = {
-        #     'params': art_params,
-        #     'lr': self.lr_init
-        # }
+        art_opt_dict = {
+            'params': art_params,
+            'lr': self.lr_init
+        }
         return torch.optim.Adam(
-            params=[seg_opt_dict], lr=self.lr_init, betas=(0.9, 0.999)
+            params=[seg_opt_dict, art_opt_dict], lr=self.lr_init, betas=(0.9, 0.999)
             )
 
     def get_part_code(self, ray_num, i):
@@ -1699,6 +1709,24 @@ class LitNeRFSegArt(LitModel):
 
             opa_part_0 = rendered_results['level_0']['opa_part']
             opa_part_1 = rendered_results['level_1']['opa_part']
+
+
+            seg_0 = rendered_results['level_0']['sample_seg']
+            seg_1 = rendered_results['level_1']['sample_seg']
+            den_0 = rendered_results['level_0']['density']
+            den_1 = rendered_results['level_1']['density']
+
+            def class_cov(seg, den):
+                clamp_den = torch.clamp(den, 0, 10)
+                seg_den = seg * clamp_den
+                class_num = seg.shape[-1]
+                seg_den_sum = seg_den.view(-1, class_num).sum(dim=0).reshape(-1)
+                return torch.cov(seg_den_sum)
+
+            cov_0 = class_cov(seg_0, den_0)
+            cov_1 = class_cov(seg_1, den_1)
+            total_cov = cov_1 + cov_0
+
             opa_target = batch['mask']
             bceloss = torch.nn.BCELoss()
             opa_max_0, _ = opa_part_0.max(dim=1)
@@ -1726,18 +1754,24 @@ class LitNeRFSegArt(LitModel):
             self.log("train/one_hot_loss_1", one_hot_loss_1, on_step=True, logger=True)
 
             # loss = loss0 + loss1 + 0.1*(opa_loss_0 + opa_loss_1) + 0.001*(one_hot_loss_0 + one_hot_loss_1)
-            if self.hparams.fine_level_loss_only:
-                loss = loss1
+            # if self.hparams.fine_level_loss_only:
+            #     loss = loss1
                 
-                if self.hparams.use_opa_loss:
-                    loss += opa_loss_1
-                    self.log("train/opa_loss_1", opa_loss_1, on_step=True, logger=True)
-            else:
-                loss = loss1 + loss0
-                if self.hparams.use_opa_loss:
-                    loss = loss + (opa_loss_0 + opa_loss_1)
-                    self.log("train/opa_loss_0", opa_loss_0, on_step=True, logger=True)
-                    self.log("train/opa_loss_1", opa_loss_1, on_step=True, logger=True)
+            #     if self.hparams.use_opa_loss:
+            #         loss += opa_loss_1
+            #         self.log("train/opa_loss_1", opa_loss_1, on_step=True, logger=True)
+            # else:
+            if self.hparams.fine_level_loss_only:
+                print('fine_level_only is deprecated!')
+            loss = loss1 + loss0
+            if self.hparams.use_opa_loss:
+                loss = loss + (opa_loss_0 + opa_loss_1)
+                self.log("train/opa_loss_0", opa_loss_0, on_step=True, logger=True)
+                self.log("train/opa_loss_1", opa_loss_1, on_step=True, logger=True)
+
+            if self.hparams.use_cov_loss:
+                loss += total_cov
+                self.log("train/cov_loss", total_cov, on_step=True, logger=True)
 
         else:
             rgb_coarse = rendered_results['level_0']['rgb_seg']

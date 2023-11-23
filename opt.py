@@ -239,6 +239,7 @@ def get_parser():
     parser.add_argument('--far', type=int, default=9, help="far plane")
     parser.add_argument('--fine_level_loss_only', type=bool, default=False, help="whether we only fit with the fine-level loss")
     parser.add_argument('--cluster_regularization', type=bool, default=False, help="whether to use regularization for training")
+    parser.add_argument('--use_cov_loss', type=bool, default=False, help="whether to use cov loss for training")
     return parser
 
 def get_opts():
