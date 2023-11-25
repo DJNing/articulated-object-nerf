@@ -1717,11 +1717,11 @@ class LitNeRFSegArt(LitModel):
             den_1 = rendered_results['level_1']['density']
 
             def class_cov(seg, den):
-                clamp_den = torch.clamp(den, 0, 10)
+                clamp_den = torch.clamp(den, 0, 1)
                 seg_den = seg * clamp_den
                 class_num = seg.shape[-1]
                 seg_den_sum = seg_den.view(-1, class_num).sum(dim=0).reshape(-1)
-                return torch.cov(seg_den_sum)
+                return torch.norm(seg_den_sum, p=2)
 
             cov_0 = class_cov(seg_0, den_0)
             cov_1 = class_cov(seg_1, den_1)
