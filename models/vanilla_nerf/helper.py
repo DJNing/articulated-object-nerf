@@ -386,6 +386,11 @@ def volumetric_composite_rendering(rgb, density, t_vals, dirs, \
     rgb_alpha = alpha.unsqueeze(dim=-1) * rgb # [r, p, s, 3]
     rgb_part = T_i.unsqueeze(dim=-1) * rgb_alpha #[r, p, s, 3]
     rgb_part = rgb_part.sum(dim=2) # [r, p, 3]
+
+    seg_alpha = alpha.unsqueeze(dim=-1) * seg # [r, p, s, p]
+    seg_part = T_i.unsqueeze(dim=-1) * seg_alpha
+    seg_part = seg_part.sum(dim=2)
+    seg_final = seg_part.sum(dim=1)
     if rgb_activation:
         import torch.nn as nn
         rgb_act = nn.Softmax(dim=1)
@@ -412,7 +417,8 @@ def volumetric_composite_rendering(rgb, density, t_vals, dirs, \
         "opacity": opacity,
         "depth": depth,
         "weights": weights,
-        "opa_part": opa_acc
+        "opa_part": opa_acc,
+        "comp_seg": seg_final
     }
     return ret_dict
 

@@ -38,13 +38,18 @@ class NonEmptyLoss(nn.Module):
 
 
 class Ellipsoid(nn.Module):
-    def __init__(self, rand_init=True) -> None:
+    def __init__(self, rand_init=True, scale=4) -> None:
         super().__init__()
         extent = torch.rand(3)
         self.extent = nn.Parameter(extent, requires_grad=True)
+        scale_vecotr = torch.rand(3)
+        self.semi_axis = nn.Parameter(scale_vecotr, requires_grad=True)
+        self.scale = scale
         
     def forward(self, x):
-        
+        '''
+        x: positions of the points
+        '''
         pass
     
 class ArticulationEstimation(nn.Module):
@@ -674,7 +679,8 @@ class NeRFSeg(nn.Module):
                     "weights": render_dict['weights'],
                     "density": density,
                     "sample_seg": seg,
-                    "opa_part": render_dict['opa_part']
+                    "opa_part": render_dict['opa_part'],
+                    "comp_seg": render_dict['comp_seg']
                 }
             else:
                 result = {
@@ -1735,6 +1741,34 @@ class LitNeRFSegArt(LitModel):
             opa_loss_0 = F.mse_loss(opa_max_0, opa_target.view(-1))
             opa_loss_1 = F.mse_loss(opa_max_1, opa_target.view(-1))
 
+            comp_seg_0 = rendered_results['level_0']['comp_seg']
+            comp_seg_1 = rendered_results['level_1']['comp_seg']
+
+            comp_seg_sum_0 = comp_seg_0.sum(dim=0)
+            comp_seg_sum_1 = comp_seg_1.sum(dim=0)
+
+            seg_cov0 = torch.cov(comp_seg_sum_0)
+            seg_cov1 = torch.cov(comp_seg_sum_1)
+
+            def mean_pairwise_absolute_difference(numbers):
+                n = len(numbers)
+                
+                # Ensure there are at least two numbers for pairwise comparison
+                if n < 2:
+                    raise ValueError("The list must contain at least two numbers for pairwise comparison.")
+
+                # Calculate the pair-wise absolute differences
+                differences = [torch.abs(numbers[i] - numbers[j]) for i in range(n) for j in range(i+1, n)]
+
+                # Calculate the mean of the absolute differences
+                mean_difference = sum(differences) / len(differences)
+
+                return mean_difference
+
+            seg_mean_diff_0 = mean_pairwise_absolute_difference(comp_seg_sum_0)
+            seg_mean_diff_1 = mean_pairwise_absolute_difference(comp_seg_sum_1)
+
+
             def get_one_hot_loss(opa):
                 '''
                 opa: shape [r, p]
@@ -1772,6 +1806,17 @@ class LitNeRFSegArt(LitModel):
             if self.hparams.use_cov_loss:
                 loss += self.hparams.cov_coef * total_cov
                 self.log("train/cov_loss", total_cov, on_step=True, logger=True)
+
+            if self.hparams.use_seg_cov_loss:
+                seg_cov = self.hparams.seg_cov_coef * (seg_cov0 + seg_cov1)
+                loss += seg_cov 
+                self.log("train/seg_cov_loss", seg_cov, on_step=True, logger=True)
+                
+            if self.hparams.use_seg_diff_loss:
+                seg_diff = self.hparams.seg_diff_coef * (seg_mean_diff_0 + seg_mean_diff_1)
+                loss += seg_diff
+                
+                self.log("train/seg_diff_loss", seg_diff, on_step=True, logger=True)
 
         else:
             rgb_coarse = rendered_results['level_0']['rgb_seg']
