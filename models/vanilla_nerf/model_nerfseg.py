@@ -22,6 +22,11 @@ import wandb
 import random
 from utils.viewpoint import view2pose_torch, pose2view_torch, change_apply_change_basis_torch, view2pose_torch_batch, pose2view_torch_batch, convert_ori_torch
 from utils.rotation import R_from_quaternions
+
+from torch.quasirandom import SobolEngine
+from scipy.spatial.transform import Rotation
+
+
 torch.backends.cudnn.deterministic = True
 torch.backends.cudnn.benchmark = False
 
@@ -56,7 +61,7 @@ class ArticulationEstimation(nn.Module):
     '''
     Current implemetation for revolute only
     '''
-    def __init__(self, mode='qua', perfect_init=False) -> None:
+    def __init__(self, mode='qua', perfect_init=False, hypothesis_radius=0.5, hypo_samples=32) -> None:
         super().__init__()
         if mode == 'qua':
             pass
@@ -82,6 +87,73 @@ class ArticulationEstimation(nn.Module):
         self.Q = nn.Parameter(init_Q, requires_grad = True)
         self.axis_origin = nn.Parameter(axis_origin, requires_grad = True)
         # self.axis_direction = nn.Parameter(axis_direction, requires_grad = True)
+        self.hypo_pos = None
+        self.hypo_Q = None
+        self.hypo_radius = hypothesis_radius
+        self.hypo_samples = hypo_samples
+
+    @staticmethod
+    def _sample_points_on_sphere_torch(origin, radius, N):
+        """
+        Generate N uniformly sampled points on a sphere and their corresponding quaternions using PyTorch.
+
+        Parameters:
+        - origin: The origin position as a 3D torch.Tensor.
+        - radius: The radius of the sphere.
+        - N: Number of samples.
+
+        Returns:
+        - points: Torch tensor of shape (N, 3) representing sampled points on the sphere.
+        - quaternions: List of quaternions representing the direction from each point to (0, 0, 0).
+        """
+        sobol_engine = SobolEngine(dimension=2, scramble=True)
+
+        # Generate N Sobol samples on the unit sphere
+        phi = 2 * np.pi * sobol_engine.draw(N).to(origin)
+        costheta = 2 * sobol_engine.draw(N).to(origin) - 1
+
+        # Convert spherical coordinates to Cartesian coordinates
+        x = radius * torch.sin(torch.acos(costheta)) * torch.cos(phi)
+        y = radius * torch.sin(torch.acos(costheta)) * torch.sin(phi)
+        z = radius * torch.cos(torch.acos(costheta))
+
+        # Translate points to the specified origin
+        points = torch.stack((x, y, z), dim=1) + origin
+
+        # Compute quaternions representing the direction from each point to the (0, 0, 0)
+        directions = points
+        directions_normalized = F.normalize(directions, dim=1)
+        quaternions = Rotation.from_matrix(
+            torch.cat((torch.eye(3).unsqueeze(0).repeat(N, 1, 1), 
+                    directions_normalized.unsqueeze(2)), dim=2)).as_quat()
+
+        return points.to(origin), quaternions.to(origin)
+
+    def gen_hypothesis(self):
+        
+        self.hypo_pos, self.hypo_Q = self._sample_points_on_sphere_torch(self.axis_origin, self.hypo_radius, self.hypo_samples)
+
+    def forward_hypothesis(self, c2w, index):
+        hypo_Q = self.hypo_Q[index]
+        hypo_pos = self.hypo_pos[index]
+        E1 = view2pose_torch_batch(c2w)
+        translation_matrix = torch.eye(4).to(c2w)
+        translation_matrix[:3, 3] = hypo_pos.view([3])
+        rotation_matrix = torch.eye(4).to(c2w)
+        R = R_from_quaternions(hypo_Q)
+        rotation_matrix[:3, :3] = R
+        E2 = change_apply_change_basis_torch(E1, rotation_matrix, translation_matrix)
+        view = pose2view_torch_batch(E2)
+        return view
+
+    def set_hypothesis(self, index):
+        self.Q = nn.Parameter(self.hypo_Q[index], requires_grad=True)
+        self.pos = nn.Parameter(self.hypo_pos[index], requires_grad=True)
+        self.clear_hypothesis()
+
+    def clear_hypothesis(self):
+        self.hypo_Q = None
+        self.hypo_pos = None
 
 
     def forward(self, c2w) -> torch.Tensor():
@@ -1650,6 +1722,293 @@ class LitNeRFSegArt(LitModel):
             pass
         pass
 
+    def no_grad_forward(self, batch):
+        with torch.no_grad:
+            c2w = batch['c2w'].to(torch.float32)
+            ray_num = c2w.shape[0]
+            # dirs = batch['dirs'].repeat(self.part_num, 1)
+            new_c2w_list = []
+            part_code_list = []
+            for i in range(self.part_num):
+                # one_hot = F.one_hot(torch.Tensor(i+1).long(), self.part_num).reshape([1, -1]).repeat(ray_num, 1).to(c2w)
+                one_hot = self.get_part_code(ray_num, i)
+                one_hot = one_hot.to(c2w)
+                part_code_list += [one_hot]
+                if i == 0:
+                    new_c2w_list += [c2w]
+                else:
+                    new_c2w = self.art_list[i-1](c2w)
+                    new_c2w_list += [new_c2w]
+
+            part_code = torch.cat(part_code_list, dim=0)
+
+            input_dict = {
+                'part_code': part_code,
+                'c2w': torch.cat(new_c2w_list, dim=0),
+                'dirs': batch['dirs'].repeat(self.part_num, 1)
+            }
+            # forward
+            loss_dict = self.get_training_loss(batch, input_dict)
+        return loss_dict
+
+    def hypothesis_testing(self, batch):
+        # get current loss:
+        current_loss_dict = self.no_grad_forward(batch)
+        current_loss = current_loss_dict['loss']
+        with torch.no_grad:
+            for art_id in range(len(self.art_list)):    
+                loss_list = []
+                for hypo_ind in range(self.art_list[art_id].num_samples):
+                    c2w = batch['c2w'].to(torch.float32)
+                    ray_num = c2w.shape[0]
+                    # dirs = batch['dirs'].repeat(self.part_num, 1)
+                    new_c2w_list = []
+                    part_code_list = []
+                    for i in range(self.part_num):
+                        # one_hot = F.one_hot(torch.Tensor(i+1).long(), self.part_num).reshape([1, -1]).repeat(ray_num, 1).to(c2w)
+                        one_hot = self.get_part_code(ray_num, i)
+                        one_hot = one_hot.to(c2w)
+                        part_code_list += [one_hot]
+                        if i == 0:
+                            new_c2w_list += [c2w]
+                        elif art_id == (i - 1):
+                            new_c2w = self.art_list[art_id].forward_hypothesis(c2w, hypo_ind)
+                            pass
+                        else:
+                            new_c2w = self.art_list[i-1](c2w)
+                            new_c2w_list += [new_c2w]
+
+                    part_code = torch.cat(part_code_list, dim=0)
+
+                    input_dict = {
+                        'part_code': part_code,
+                        'c2w': torch.cat(new_c2w_list, dim=0),
+                        'dirs': batch['dirs'].repeat(self.part_num, 1)
+                    }
+                    # forward
+                    loss_dict = self.get_training_loss(batch, input_dict)
+                    loss_list += [loss_dict['loss']]
+                # set the hypothesis with lowest loss for this art module
+                min_loss = torch.cat(loss_list).min()
+                min_idx = torch.cat(loss_list).argmin()
+                if current_loss > min_loss:
+                    self.art_list[art_id].set_hypothesis(min_idx)
+                else:
+                    self.art_list[art_id].clear_hypothesis()
+        return
+
+
+    def get_training_loss(self, batch, input_dict):
+        c2w = batch['c2w'].to(torch.float32)
+        ray_num = c2w.shape[0]
+        rendered_results = self.model.forward_c2w(
+            input_dict, self.randomized, self.white_bkgd, self.near, self.far
+        )
+        loss_dict = {}
+        rgb_target = batch["rgb"]
+        if self.hparams.composite_rendering:
+            rgb_coarse = rendered_results['level_0']['rgb']
+            rgb_fine = rendered_results['level_1']['rgb']
+
+            rgb_coarse = rgb_coarse.view([ray_num, 3])
+            rgb_fine = rgb_fine.view([ray_num, 3])
+
+            loss0 = helper.img2mse(rgb_coarse, rgb_target)
+            loss1 = helper.img2mse(rgb_fine, rgb_target)
+
+            opa_part_0 = rendered_results['level_0']['opa_part']
+            opa_part_1 = rendered_results['level_1']['opa_part']
+
+
+            seg_0 = rendered_results['level_0']['sample_seg']
+            seg_1 = rendered_results['level_1']['sample_seg']
+            den_0 = rendered_results['level_0']['density']
+            den_1 = rendered_results['level_1']['density']
+
+            def class_cov(seg, den):
+                clamp_den = torch.clamp(den, 0, 1)
+                seg_den = seg * clamp_den
+                class_num = seg.shape[-1]
+                seg_den_sum = seg_den.view(-1, class_num).sum(dim=0).reshape(-1)
+                return torch.norm(seg_den_sum, p=2)
+
+            cov_0 = class_cov(seg_0, den_0)
+            cov_1 = class_cov(seg_1, den_1)
+            total_cov = cov_1 + cov_0
+
+            opa_target = batch['mask']
+            bceloss = torch.nn.BCELoss()
+            opa_max_0, _ = opa_part_0.max(dim=1)
+            opa_max_1, _ = opa_part_1.max(dim=1)
+            
+            opa_loss_0 = F.mse_loss(opa_max_0, opa_target.view(-1))
+            opa_loss_1 = F.mse_loss(opa_max_1, opa_target.view(-1))
+
+            comp_seg_0 = rendered_results['level_0']['comp_seg']
+            comp_seg_1 = rendered_results['level_1']['comp_seg']
+
+            comp_seg_sum_0 = comp_seg_0.sum(dim=0)
+            comp_seg_sum_1 = comp_seg_1.sum(dim=0)
+
+            seg_cov0 = torch.cov(comp_seg_sum_0)
+            seg_cov1 = torch.cov(comp_seg_sum_1)
+
+            def mean_pairwise_absolute_difference(numbers):
+                n = len(numbers)
+                
+                # Ensure there are at least two numbers for pairwise comparison
+                if n < 2:
+                    raise ValueError("The list must contain at least two numbers for pairwise comparison.")
+
+                # Calculate the pair-wise absolute differences
+                differences = [torch.abs(numbers[i] - numbers[j]) for i in range(n) for j in range(i+1, n)]
+
+                # Calculate the mean of the absolute differences
+                mean_difference = sum(differences) / len(differences)
+
+                return mean_difference
+
+            seg_mean_diff_0 = mean_pairwise_absolute_difference(comp_seg_sum_0)
+            seg_mean_diff_1 = mean_pairwise_absolute_difference(comp_seg_sum_1)
+
+
+            def get_one_hot_loss(opa):
+                '''
+                opa: shape [r, p]
+                '''
+                eps = 1e-7
+                max_opa, _ = opa.max(dim=1)
+                opa_sum = opa.sum(dim=1) + eps
+                opa_prob = max_opa / opa_sum
+                loss = torch.abs(opa_prob - opa.sum(dim=1) / opa_sum)
+                return loss.mean()
+
+            # one_hot_loss_0 = get_one_hot_loss(opa_part_0)
+            # one_hot_loss_1 = get_one_hot_loss(opa_part_1)
+
+
+            # self.log("train/one_hot_loss_0", one_hot_loss_0, on_step=True, logger=True)
+            # self.log("train/one_hot_loss_1", one_hot_loss_1, on_step=True, logger=True)
+
+            # loss = loss0 + loss1 + 0.1*(opa_loss_0 + opa_loss_1) + 0.001*(one_hot_loss_0 + one_hot_loss_1)
+            # if self.hparams.fine_level_loss_only:
+            #     loss = loss1
+                
+            #     if self.hparams.use_opa_loss:
+            #         loss += opa_loss_1
+            #         self.log("train/opa_loss_1", opa_loss_1, on_step=True, logger=True)
+            # else:
+            if self.hparams.fine_level_loss_only:
+                print('fine_level_only is deprecated!')
+
+            loss = loss1 + loss0
+
+            loss_dict['rgb_loss'] = loss0 + loss1
+            if self.hparams.use_opa_loss:
+                loss = loss + (opa_loss_0 + opa_loss_1)
+                self.log("train/opa_loss_0", opa_loss_0, on_step=True, logger=True)
+                self.log("train/opa_loss_1", opa_loss_1, on_step=True, logger=True)
+                loss_dict['opa_loss'] = (opa_loss_0 + opa_loss_1)
+
+            if self.hparams.use_cov_loss:
+                loss += self.hparams.cov_coef * total_cov
+                self.log("train/cov_loss", total_cov, on_step=True, logger=True)
+                loss_dict['cov_loss'] = self.hparams.cov_coef * total_cov
+
+            if self.hparams.use_seg_cov_loss:
+                seg_cov = self.hparams.seg_cov_coef * (seg_cov0 + seg_cov1)
+                loss += seg_cov 
+                self.log("train/seg_cov_loss", seg_cov, on_step=True, logger=True)
+                loss_dict['seg_cov_loss'] = self.hparams.seg_cov_coef * (seg_cov0 + seg_cov1)
+                
+            if self.hparams.use_seg_diff_loss:
+                seg_diff = self.hparams.seg_diff_coef * (seg_mean_diff_0 + seg_mean_diff_1)
+                loss += seg_diff
+                self.log("train/seg_diff_loss", seg_diff, on_step=True, logger=True)
+                loss_dict['seg_diff_loss'] = seg_diff
+
+        else:
+            rgb_coarse = rendered_results['level_0']['rgb_seg']
+            rgb_fine = rendered_results['level_1']['rgb_seg']
+
+            rgb_coarse = rgb_coarse.view([-1, ray_num, 3]).sum(dim=0)
+            rgb_fine = rgb_fine.view([-1, ray_num, 3]).sum(dim=0)
+            
+            if self.hparams.record_hard_sample:
+                if not self.train_dataset.use_sample_list:
+                    loss0_dict = self._calculate_loss_and_record_sample(rgb_coarse, rgb_target, batch['idx'])
+                    loss1_dict = self._calculate_loss_and_record_sample(rgb_fine, rgb_target, batch['idx'])
+                    loss0 = loss0_dict['loss']
+                    loss1 = loss1_dict['loss']
+                    sample_0 = loss0_dict['hard_samples']
+                    sample_1 = loss1_dict['hard_samples']
+                    samples = torch.cat((sample_0, sample_1)).unique()
+                    self.train_dataset.sample_list += [samples]
+
+                    loss = loss0 + loss1
+            else:
+                loss0 = helper.img2mse(rgb_coarse, rgb_target)
+                loss1 = helper.img2mse(rgb_fine, rgb_target)
+
+                loss = loss0 + loss1
+
+        psnr0 = helper.mse2psnr(loss0)
+        psnr1 = helper.mse2psnr(loss1)
+    
+        self.log("train/psnr1", psnr1, on_step=True, prog_bar=True, logger=True)
+        self.log("train/psnr0", psnr0, on_step=True, prog_bar=True, logger=True)
+        # opacity loss
+        if self.hparams.use_opa_loss:
+            opa_target = batch['mask']
+
+            opa_coarse = rendered_results['level_0']['opacity'].view([-1, ray_num]).permute(1, 0)
+            opa_fine = rendered_results['level_1']['opacity'].view([-1, ray_num]).permute(1, 0)
+            # # [ray_num, part_num]
+            max_opa_c, _ = torch.max(opa_coarse, dim=0)
+            max_opa_f, _ = torch.max(opa_fine, dim=0)
+            
+            opa_loss_c = (max_opa_c - opa_target)**2
+            opa_loss_f = (max_opa_f - opa_target)**2
+            opa_loss = 0.5 * (opa_loss_c.mean() + opa_loss_f.mean())
+            self.log("train/opa_loss", opa_loss, on_step=True, prog_bar=True, logger=True)
+            
+            loss += 0.1*opa_loss
+
+        if self.hparams.use_dist_reg:
+            density_c = rendered_results['level_0']['density']
+            density_f = rendered_results['level_1']['density']
+
+            raw_seg_c = rendered_results['level_0']['sample_seg']
+            raw_seg_f = rendered_results['level_1']['sample_seg']
+
+            dist_c = get_adjacency_dist(raw_seg_c)
+            dist_f = get_adjacency_dist(raw_seg_f)
+
+            mean_dist = 0.5*(density_c*dist_c).abs().mean() + 0.5*(density_f * dist_f).abs().mean()
+            self.log("train/dist_reg", mean_dist, on_step=True)
+            loss += 0.01*mean_dist
+
+
+        if self.hparams.use_bg_reg:
+            # use regularization
+
+            seg_bg_c = rendered_results['level_0']['sample_seg'][:, :, 0]
+            seg_bg_f = rendered_results['level_1']['sample_seg'][:, :, 0]
+
+            density_c = rendered_results['level_0']['density'].reshape(seg_bg_c.shape)
+            density_f = rendered_results['level_1']['density'].reshape(seg_bg_f.shape)
+
+            sum_seg_c = (seg_bg_c * density_c).sum()
+            sum_seg_f = (seg_bg_f * density_f).sum()
+
+            bg_regularization = 1e-8 * (sum_seg_c + sum_seg_f)
+
+            loss += bg_regularization
+            self.log("train/bg_regularize", bg_regularization, on_step=True)
+        
+        self.log("train/loss", loss, on_step=True)
+        loss_dict['loss'] = loss
+        return loss_dict
 
     def training_step(self, batch, batch_idx):
 
@@ -1768,33 +2127,6 @@ class LitNeRFSegArt(LitModel):
             seg_mean_diff_0 = mean_pairwise_absolute_difference(comp_seg_sum_0)
             seg_mean_diff_1 = mean_pairwise_absolute_difference(comp_seg_sum_1)
 
-
-            def get_one_hot_loss(opa):
-                '''
-                opa: shape [r, p]
-                '''
-                eps = 1e-7
-                max_opa, _ = opa.max(dim=1)
-                opa_sum = opa.sum(dim=1) + eps
-                opa_prob = max_opa / opa_sum
-                loss = torch.abs(opa_prob - opa.sum(dim=1) / opa_sum)
-                return loss.mean()
-
-            # one_hot_loss_0 = get_one_hot_loss(opa_part_0)
-            # one_hot_loss_1 = get_one_hot_loss(opa_part_1)
-
-
-            # self.log("train/one_hot_loss_0", one_hot_loss_0, on_step=True, logger=True)
-            # self.log("train/one_hot_loss_1", one_hot_loss_1, on_step=True, logger=True)
-
-            # loss = loss0 + loss1 + 0.1*(opa_loss_0 + opa_loss_1) + 0.001*(one_hot_loss_0 + one_hot_loss_1)
-            # if self.hparams.fine_level_loss_only:
-            #     loss = loss1
-                
-            #     if self.hparams.use_opa_loss:
-            #         loss += opa_loss_1
-            #         self.log("train/opa_loss_1", opa_loss_1, on_step=True, logger=True)
-            # else:
             if self.hparams.fine_level_loss_only:
                 print('fine_level_only is deprecated!')
             loss = loss1 + loss0
@@ -1865,26 +2197,6 @@ class LitNeRFSegArt(LitModel):
             
             loss += 0.1*opa_loss
 
-        # smoothness loss
-
-        # density [ray_num, sample_num, 1] and raw_seg [ray_num, sample_num, part_num]
-        # pad raw_seg in a mirror manner
-        # 
-
-
-        # opacity reguralization
-        # opa_sum_c = opa_coarse.sum(dim=0) + 1e-10
-        # opa_sum_f = opa_fine.sum(dim=0) + 1e-10
-        # opa_prob_c = max_opa_c/opa_sum_c
-        # opa_prob_f = max_opa_f/opa_sum_f
-        # opa_prob_loss_c = opa_prob_c * torch.log(opa_prob_c+1e-10) + (1-opa_prob_c)*torch.log(1-opa_prob_c+1e-10)
-        # opa_prob_loss_f = opa_prob_f * torch.log(opa_prob_f+1e-10) + (1-opa_prob_f)*torch.log(1-opa_prob_f+1e-10)
-
-        # reg_loss = -0.5 * (opa_prob_loss_f.mean() + opa_prob_loss_c.mean())
-        # self.log("train/opa_reg_loss", reg_loss, on_step=True, prog_bar=True, logger=True)
-
-        # loss = loss0 + loss1 #+ opa_loss + 0.1*reg_loss
-
         if self.hparams.use_dist_reg:
             density_c = rendered_results['level_0']['density']
             density_f = rendered_results['level_1']['density']
@@ -1899,9 +2211,7 @@ class LitNeRFSegArt(LitModel):
             self.log("train/dist_reg", mean_dist, on_step=True)
             loss += 0.01*mean_dist
 
-
         if self.hparams.use_bg_reg:
-            # use regularization
 
             seg_bg_c = rendered_results['level_0']['sample_seg'][:, :, 0]
             seg_bg_f = rendered_results['level_1']['sample_seg'][:, :, 0]
