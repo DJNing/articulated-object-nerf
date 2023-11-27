@@ -243,6 +243,8 @@ def get_parser():
     parser.add_argument('--cov_coef', type=float, default=1e-4, help="coefficient for cov loss")
     parser.add_argument('--use_seg_diff_loss', type=bool, default=False, help="whether to enable seg_diff_loss")
     parser.add_argument('--seg_diff_coef', type=float, default=1e-4, help="coefficient for cov loss")
+    parser.add_argument('--use_seg_cov_loss', type=bool, default=False, help="whether to enable seg_diff_loss")
+    parser.add_argument('--seg_cov_coef', type=float, default=1e-4, help="coefficient for cov loss")
     return parser
 
 def get_opts():

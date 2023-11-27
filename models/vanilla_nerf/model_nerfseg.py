@@ -1780,12 +1780,12 @@ class LitNeRFSegArt(LitModel):
                 loss = torch.abs(opa_prob - opa.sum(dim=1) / opa_sum)
                 return loss.mean()
 
-            one_hot_loss_0 = get_one_hot_loss(opa_part_0)
-            one_hot_loss_1 = get_one_hot_loss(opa_part_1)
+            # one_hot_loss_0 = get_one_hot_loss(opa_part_0)
+            # one_hot_loss_1 = get_one_hot_loss(opa_part_1)
 
 
-            self.log("train/one_hot_loss_0", one_hot_loss_0, on_step=True, logger=True)
-            self.log("train/one_hot_loss_1", one_hot_loss_1, on_step=True, logger=True)
+            # self.log("train/one_hot_loss_0", one_hot_loss_0, on_step=True, logger=True)
+            # self.log("train/one_hot_loss_1", one_hot_loss_1, on_step=True, logger=True)
 
             # loss = loss0 + loss1 + 0.1*(opa_loss_0 + opa_loss_1) + 0.001*(one_hot_loss_0 + one_hot_loss_1)
             # if self.hparams.fine_level_loss_only:
