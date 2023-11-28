@@ -8,6 +8,18 @@ from torchvision import transforms as T
 from pathlib import Path as P
 from .ray_utils import *
 import torch.nn.functional as F
+
+'''
+Sapien input coordinate system:
+
+x left, y up, z back
+
+openGL:
+
+x forward, y left, z up
+'''
+
+
 class SapienDataset(Dataset):
     def __init__(self, root_dir, split='train', img_wh=(320, 240), model_type = None, white_back = None, eval_inference= None):
         self.root_dir = root_dir

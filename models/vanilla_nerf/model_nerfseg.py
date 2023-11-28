@@ -61,7 +61,8 @@ class ArticulationEstimation(nn.Module):
     '''
     Current implemetation for revolute only
     '''
-    def __init__(self, mode='qua', perfect_init=False, hypothesis_radius=0.5, hypo_samples=32, radius_factor=0.8) -> None:
+    def __init__(self, mode='qua', perfect_init=False, hypothesis_radius=0.5, 
+                 hypo_samples=32, angle_range=10, radius_factor=0.5) -> None:
         super().__init__()
         if mode == 'qua':
             pass
@@ -91,11 +92,13 @@ class ArticulationEstimation(nn.Module):
         self.hypo_Q = None
         self.hypo_radius = hypothesis_radius
         self.hypo_samples = hypo_samples
+        self.angle_range = angle_range
+        self.radius_factor = radius_factor
 
     @staticmethod
     def _sample_points_on_sphere_torch(origin, radius, N):
         """
-        Generate N uniformly sampled points on a sphere and their corresponding quaternions using PyTorch.
+        Generate N uniformly sampled points on a sphere.
 
         Parameters:
         - origin: The origin position as a 3D torch.Tensor.
@@ -104,7 +107,6 @@ class ArticulationEstimation(nn.Module):
 
         Returns:
         - points: Torch tensor of shape (N, 3) representing sampled points on the sphere.
-        - quaternions: List of quaternions representing the direction from each point to (0, 0, 0).
         """
         sobol_engine = SobolEngine(dimension=2, scramble=True)
 
@@ -120,18 +122,17 @@ class ArticulationEstimation(nn.Module):
         # Translate points to the specified origin
         points = torch.stack((x, y, z), dim=1) + origin
 
-        # Compute quaternions representing the direction from each point to the (0, 0, 0)
-        directions = points
-        directions_normalized = F.normalize(directions, dim=1)
-        quaternions = Rotation.from_matrix(
-            torch.cat((torch.eye(3).unsqueeze(0).repeat(N, 1, 1), 
-                    directions_normalized.unsqueeze(2)), dim=2)).as_quat()
 
-        return points.to(origin), quaternions.to(origin)
-
+        return points.to(origin)
+    
     def gen_hypothesis(self):
         
-        self.hypo_pos, self.hypo_Q = self._sample_points_on_sphere_torch(self.axis_origin, self.hypo_radius, self.hypo_samples)
+        self.hypo_pos = self._sample_points_on_sphere_torch(self.axis_origin, self.hypo_radius, self.
+                                                            hypo_samples)
+        self.hypo_Q = sample_uniform_quaternions_torch(self.Q, self.hypo_samples, self.angle_range)
+
+        self.hypo_radius *= self.radius_factor
+        self.angle_range *= self.radius_factor
 
     def forward_hypothesis(self, c2w, index):
         hypo_Q = self.hypo_Q[index]

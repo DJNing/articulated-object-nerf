@@ -8,6 +8,51 @@ import torch.nn.functional as F
 import functools
 import math
 import warnings
+from scipy.spatial.transform import Rotation
+from torch.quasirandom import SobolEngine
+
+def sample_uniform_quaternions_torch(base_quaternion, N, angle_range):
+    sobol_engine = SobolEngine(dimension=3, scramble=True)
+    angles = 2 * angle_range * sobol_engine.draw(N) - angle_range # in [-angle_range, angle_range]
+    
+    rot = Rotation.from_euler('xyz', angles, degrees=True)
+    base_quat = F.normalize(base_quaternion.detach(), p=2., dim=0).reshape(-1, 4).repeat(N, 1)
+    base_rot = Rotation.from_quat(base_quat.cpu().numpy())
+    final_rot = base_rot * rot
+    final_quat = final_rot.as_quat()
+    ret_quat = torch.Tensor(final_quat).to(base_quaternion)
+    return ret_quat
+
+
+def sample_uniform_quaternions(base_quaternion, num_samples, angle_ranges):
+    """
+    Generate N uniformly sampled quaternions within specified angle ranges.
+
+    Parameters:
+    - base_quaternion: The base quaternion representing the starting rotation.
+    - num_samples: The number of quaternions to generate.
+    - angle_ranges: A 3x2 array specifying the angle range for each axis in degrees.
+                    Each row corresponds to an axis (x, y, z), and the columns specify the range [min, max].
+
+    Returns:
+    - sampled_quaternions: List of N uniformly sampled quaternions.
+    """
+    sampled_quaternions = []
+
+    for _ in range(num_samples):
+        # Generate random angles within specified ranges for each axis
+        sampled_angles = np.radians(np.random.uniform(angle_ranges[:, 0], angle_ranges[:, 1]))
+
+        # Convert sampled angles to quaternion
+        sampled_quaternion = Rotation.from_euler('xyz', sampled_angles).as_quat()
+
+        # Combine with the base quaternion to obtain the final sampled quaternion
+        sampled_quaternion = Rotation.from_quat(base_quaternion).multiply(Rotation.from_quat(sampled_quaternion)).as_quat()
+
+        sampled_quaternions.append(sampled_quaternion)
+
+    return sampled_quaternions
+
 
 
 def world2camera_viewdirs(w_viewdirs, cam2world, NS):
