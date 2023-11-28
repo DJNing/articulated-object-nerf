@@ -173,7 +173,7 @@ def main(hparams):
             benchmark=False,
             check_val_every_n_epoch=1,
             
-            limit_val_batches=5,  # for single scene scenario,
+            limit_val_batches=10,  # for single scene scenario,
             # profiler="simple" if hparams.num_gpus==1 else None,
             # profiler=profiler,
             strategy=DDPPlugin(find_unused_parameters=find_unused_parameters)

@@ -62,7 +62,7 @@ class ArticulationEstimation(nn.Module):
     Current implemetation for revolute only
     '''
     def __init__(self, mode='qua', perfect_init=False, hypothesis_radius=0.5, 
-                 hypo_samples=32, angle_range=10, radius_factor=0.5) -> None:
+                 hypo_samples=32, angle_range=10, radius_factor=0.9) -> None:
         super().__init__()
         if mode == 'qua':
             pass
@@ -108,7 +108,7 @@ class ArticulationEstimation(nn.Module):
         Returns:
         - points: Torch tensor of shape (N, 3) representing sampled points on the sphere.
         """
-        sobol_engine = SobolEngine(dimension=2, scramble=True)
+        sobol_engine = SobolEngine(dimension=1, scramble=True)
 
         # Generate N Sobol samples on the unit sphere
         phi = 2 * np.pi * sobol_engine.draw(N).to(origin)
@@ -120,7 +120,7 @@ class ArticulationEstimation(nn.Module):
         z = radius * torch.cos(torch.acos(costheta))
 
         # Translate points to the specified origin
-        points = torch.stack((x, y, z), dim=1) + origin
+        points = torch.cat((x, y, z), dim=1) + origin
 
 
         return points.to(origin)
@@ -1766,7 +1766,8 @@ class LitNeRFSegArt(LitModel):
         with torch.inference_mode():
             for art_id in range(len(self.art_list)):    
                 loss_list = []
-                for hypo_ind in range(self.art_list[art_id].num_samples):
+                self.art_list[art_id].gen_hypothesis()
+                for hypo_ind in range(self.art_list[art_id].hypo_samples):
                     c2w = batch['c2w'].to(torch.float32)
                     ray_num = c2w.shape[0]
                     # dirs = batch['dirs'].repeat(self.part_num, 1)
@@ -1781,7 +1782,7 @@ class LitNeRFSegArt(LitModel):
                             new_c2w_list += [c2w]
                         elif art_id == (i - 1):
                             new_c2w = self.art_list[art_id].forward_hypothesis(c2w, hypo_ind)
-                            pass
+                            new_c2w_list += [new_c2w]
                         else:
                             new_c2w = self.art_list[i-1](c2w)
                             new_c2w_list += [new_c2w]
@@ -1797,8 +1798,9 @@ class LitNeRFSegArt(LitModel):
                     loss_dict = self.get_training_loss(batch, input_dict)
                     loss_list += [loss_dict['loss']]
                 # set the hypothesis with lowest loss for this art module
-                min_loss = torch.cat(loss_list).min()
-                min_idx = torch.cat(loss_list).argmin()
+                loss_list = torch.stack(loss_list, dim=0)
+                min_loss = loss_list.min()
+                min_idx = loss_list.argmin()
                 if current_loss > min_loss:
                     self.art_list[art_id].set_hypothesis(min_idx)
                 else:
