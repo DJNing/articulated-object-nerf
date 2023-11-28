@@ -61,7 +61,7 @@ class ArticulationEstimation(nn.Module):
     '''
     Current implemetation for revolute only
     '''
-    def __init__(self, mode='qua', perfect_init=False, hypothesis_radius=0.5, hypo_samples=32) -> None:
+    def __init__(self, mode='qua', perfect_init=False, hypothesis_radius=0.5, hypo_samples=32, radius_factor=0.8) -> None:
         super().__init__()
         if mode == 'qua':
             pass
@@ -1568,8 +1568,15 @@ class LitNeRFSegArt(LitModel):
         self.part_num = self.hparams.part_num
         self.lr_final = self.hparams.lr_final
         self.art_list = []
+        art_args_dict = {
+            'mode': 'qua', 
+            'perfect_init': self.hparams.perfect_init,
+            'hypothesis_radius': self.hparams.hypothesis_radius,
+            'hypo_samples': self.hparams.hypothesis_samples,
+            'radius_factor': self.hparams.hypothesis_radius_scaling
+        }
         for _ in range(self.part_num - 1):
-            self.art_list += [ArticulationEstimation(perfect_init=self.hparams.perfect_init)]
+            self.art_list += [ArticulationEstimation(**art_args_dict)]
         
         if self.hparams.one_hot_loss:
             self.one_hot_loss = OneHotLoss()
@@ -2016,6 +2023,10 @@ class LitNeRFSegArt(LitModel):
             if k == "obj_idx":
                 continue
             batch[k] = v.squeeze(0)
+        if self.global_step != 0:
+            if self.global_step % self.hparams.hypothesis_steps == 0:
+                self.hypothesis_testing(batch)
+                # return
 
         # transform c2w
         c2w = batch['c2w'].to(torch.float32)

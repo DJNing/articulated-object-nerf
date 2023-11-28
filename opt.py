@@ -245,6 +245,11 @@ def get_parser():
     parser.add_argument('--seg_diff_coef', type=float, default=1e-4, help="coefficient for cov loss")
     parser.add_argument('--use_seg_cov_loss', type=bool, default=False, help="whether to enable seg_diff_loss")
     parser.add_argument('--seg_cov_coef', type=float, default=1e-4, help="coefficient for cov loss")
+    parser.add_argument('--use_hypothesis', type=bool, default=False, help="whether to enable hypothesis test for articulation estimation during training ")
+    parser.add_argument('--hypothesis_samples', type=int, default=32, help="number of samples for hypothesis for articulation estimation during training ")
+    parser.add_argument('--hypothesis_radius', type=float, default=0.5, help="radius of hypothesis sampling sphere for articulation estimation during training ")
+    parser.add_argument('--hypothesis_radius_scaling', type=float, default=0.8, help="scaling factor for radisu of hypothesis sampling sphere for articulation estimation during training ")
+    parser.add_argument('--hypothesis_steps', type=int, default=100, help="apply hypothesis test after n steps")
     return parser
 
 def get_opts():
