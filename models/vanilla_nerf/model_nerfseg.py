@@ -1731,7 +1731,7 @@ class LitNeRFSegArt(LitModel):
         pass
 
     def no_grad_forward(self, batch):
-        with torch.no_grad:
+        with torch.inference_mode():
             c2w = batch['c2w'].to(torch.float32)
             ray_num = c2w.shape[0]
             # dirs = batch['dirs'].repeat(self.part_num, 1)
@@ -1763,7 +1763,7 @@ class LitNeRFSegArt(LitModel):
         # get current loss:
         current_loss_dict = self.no_grad_forward(batch)
         current_loss = current_loss_dict['loss']
-        with torch.no_grad:
+        with torch.inference_mode():
             for art_id in range(len(self.art_list)):    
                 loss_list = []
                 for hypo_ind in range(self.art_list[art_id].num_samples):
