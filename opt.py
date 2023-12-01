@@ -249,7 +249,9 @@ def get_parser():
     parser.add_argument('--hypothesis_samples', type=int, default=32, help="number of samples for hypothesis for articulation estimation during training ")
     parser.add_argument('--hypothesis_radius', type=float, default=0.5, help="radius of hypothesis sampling sphere for articulation estimation during training ")
     parser.add_argument('--hypothesis_radius_scaling', type=float, default=0.8, help="scaling factor for radisu of hypothesis sampling sphere for articulation estimation during training ")
-    parser.add_argument('--hypothesis_steps', type=int, default=100, help="apply hypothesis test after n steps")
+    parser.add_argument('--hypothesis_steps', type=int, default=100, help="apply hypothesis test every n steps")
+    parser.add_argument('--hypothesis_start_step', type=int, default=500, help="enable hypothesis test after n steps")
+    
     return parser
 
 def get_opts():

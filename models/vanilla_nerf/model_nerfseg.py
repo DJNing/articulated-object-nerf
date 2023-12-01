@@ -62,7 +62,7 @@ class ArticulationEstimation(nn.Module):
     Current implemetation for revolute only
     '''
     def __init__(self, mode='qua', perfect_init=False, hypothesis_radius=0.5, 
-                 hypo_samples=32, angle_range=10, radius_factor=0.9) -> None:
+                 hypo_samples=32, angle_range=5, radius_factor=0.5) -> None:
         super().__init__()
         if mode == 'qua':
             pass
@@ -73,14 +73,16 @@ class ArticulationEstimation(nn.Module):
         else:
             raise RuntimeError('mode == %s for ArticulationEstimation is not defined' % mode)
         
+        self.perfect_Q = torch.Tensor([0.97237, 0, -0.233445, 0]) # asset.set_qpos(np.inf * asset.dof)
+        self.perfect_axis_origin = convert_ori_torch(torch.Tensor([0, -0.007706040424053753, -0.24714714808389615]))
         if perfect_init:
             # perfect init
             init_Q = torch.Tensor([0.97237, 0, -0.233445, 0]) # asset.set_qpos(np.inf * asset.dof)
             axis_origin = convert_ori_torch(torch.Tensor([0, -0.007706040424053753, -0.24714714808389615]))
         # normal init
         else:
-            init_Q = torch.Tensor([1, 0, 0, 0])
-            axis_origin = torch.Tensor([ 0, 0, 0])
+            init_Q = sample_uniform_quaternions_torch(self.perfect_Q, 1, 1)
+            axis_origin = self._sample_points_on_sphere_torch(self.perfect_axis_origin, 0.5, 1)
 
         # axis angle can be obtained from quaternion
         # axis_direction = torch.Tensor([0, 0, 0])
@@ -2028,7 +2030,8 @@ class LitNeRFSegArt(LitModel):
             batch[k] = v.squeeze(0)
         if self.global_step != 0:
             if self.global_step % self.hparams.hypothesis_steps == 0:
-                self.hypothesis_testing(batch)
+                if self.global_step >= self.hparams.hypothesis_start_step:
+                    self.hypothesis_testing(batch)
                 # return
 
         # transform c2w
@@ -2122,6 +2125,10 @@ class LitNeRFSegArt(LitModel):
 
             seg_cov0 = torch.cov(comp_seg_sum_0)
             seg_cov1 = torch.cov(comp_seg_sum_1)
+
+            # non-overlapping loss
+
+            
 
             def mean_pairwise_absolute_difference(numbers):
                 n = len(numbers)
