@@ -2164,8 +2164,8 @@ class LitNeRFSegArt(LitModel):
                 for i in range(max(seg_gt)): 
                     seg_sum_gt += [(seg_gt==(i+1)).sum()]
                 seg_sum_gt = torch.stack(seg_sum_gt)
-                seg_mean_diff_0 = F.mse_loss(comp_seg_sum_0, seg_sum_gt)
-                seg_mean_diff_1 = F.mse_loss(comp_seg_sum_1, seg_sum_gt)
+                seg_mean_diff_0 = F.mse_loss(comp_seg_sum_0, seg_sum_gt.to(comp_seg_sum_0))
+                seg_mean_diff_1 = F.mse_loss(comp_seg_sum_1, seg_sum_gt.to(comp_seg_sum_1))
             else:
                 seg_mean_diff_0 = mean_pairwise_absolute_difference(comp_seg_sum_0)
                 seg_mean_diff_1 = mean_pairwise_absolute_difference(comp_seg_sum_1)
@@ -2489,8 +2489,8 @@ class LitNeRFSegArt(LitModel):
                 "directions":self.directions
             }
         """
-        # if self.sanity_check:
-        #     return
+        if self.sanity_check:
+            return
         for k, v in batch.items():
             if k == "obj_idx":
                 continue
@@ -2547,7 +2547,8 @@ class LitNeRFSegArt(LitModel):
         self.sanity_check = False
 
     def validation_epoch_end(self, outputs):
-        
+        if self.sanity_check:
+            return
         psnr = sum(ret['psnr'] for ret in outputs) / len(outputs)
         self.log("val/psnr", psnr, on_epoch=True)
         
