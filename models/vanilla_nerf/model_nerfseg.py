@@ -2140,8 +2140,8 @@ class LitNeRFSegArt(LitModel):
             seg_occ_1 = torch.clamp(seg_occ_1, min=1e-6, max=1-1e-6)
 
             # mask occupancy loss
-            seg_occ_loss_0 = bceloss(seg_occ_0, opa_target)
-            seg_occ_loss_1 = bceloss(seg_occ_1, opa_target)
+            seg_occ_loss_0 = bceloss(seg_occ_0, opa_target.view(-1))
+            seg_occ_loss_1 = bceloss(seg_occ_1, opa_target.view(-1))
             seg_occ_loss = seg_occ_loss_0 + seg_occ_loss_1
 
             def mean_pairwise_absolute_difference(numbers):
