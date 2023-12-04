@@ -1711,7 +1711,7 @@ class LitNeRFSegArt(LitModel):
 
         art_opt_dict = {
             'params': art_params,
-            'lr': self.lr_init
+            'lr': 1e-4
         }
         return torch.optim.Adam(
             params=[seg_opt_dict, art_opt_dict], lr=self.lr_init, betas=(0.9, 0.999)
@@ -2041,7 +2041,6 @@ class LitNeRFSegArt(LitModel):
         new_c2w_list = []
         part_code_list = []
         for i in range(self.part_num):
-            # one_hot = F.one_hot(torch.Tensor(i+1).long(), self.part_num).reshape([1, -1]).repeat(ray_num, 1).to(c2w)
             one_hot = self.get_part_code(ray_num, i)
             one_hot = one_hot.to(c2w)
             part_code_list += [one_hot]
@@ -2052,16 +2051,12 @@ class LitNeRFSegArt(LitModel):
                 new_c2w_list += [new_c2w]
 
         part_code = torch.cat(part_code_list, dim=0)
-        # batch['part_code'] = part_code
-        # batch['c2w_new'] = torch.cat(new_c2w_list, dim=0)
-        # batch['dirs_new'] = batch['dirs'].repeat(self.part_num, 1)
 
         input_dict = {
             'part_code': part_code,
             'c2w': torch.cat(new_c2w_list, dim=0),
             'dirs': batch['dirs'].repeat(self.part_num, 1)
         }
-        # forward
         
         rendered_results = self.model.forward_c2w(
             input_dict, self.randomized, self.white_bkgd, self.near, self.far
@@ -2126,9 +2121,15 @@ class LitNeRFSegArt(LitModel):
             seg_cov0 = torch.cov(comp_seg_sum_0)
             seg_cov1 = torch.cov(comp_seg_sum_1)
 
-            # non-overlapping loss
+            seg_occ_0, _ = comp_seg_0.max(dim=1)
+            seg_occ_1, _ = comp_seg_1.max(dim=1)
+            seg_occ_0 = torch.clamp(seg_occ_0, min=1e-6, max=1-1e-6)
+            seg_occ_1 = torch.clamp(seg_occ_1, min=1e-6, max=1-1e-6)
 
-            
+            # mask occupancy loss
+            seg_occ_loss_0 = bceloss(seg_occ_0, opa_target)
+            seg_occ_loss_1 = bceloss(seg_occ_1, opa_target)
+            seg_occ_loss = seg_occ_loss_0 + seg_occ_loss_1
 
             def mean_pairwise_absolute_difference(numbers):
                 n = len(numbers)
@@ -2144,9 +2145,17 @@ class LitNeRFSegArt(LitModel):
                 mean_difference = sum(differences) / len(differences)
 
                 return mean_difference
-
-            seg_mean_diff_0 = mean_pairwise_absolute_difference(comp_seg_sum_0)
-            seg_mean_diff_1 = mean_pairwise_absolute_difference(comp_seg_sum_1)
+            if self.hparams.use_seg_diff_gt:
+                seg_gt = batch['seg_gt']
+                seg_sum_gt = list()
+                for i in range(max(seg_gt)): 
+                    seg_sum_gt += [(seg_gt==(i+1)).sum()]
+                seg_sum_gt = torch.stack(seg_sum_gt)
+                seg_mean_diff_0 = F.mse_loss(comp_seg_sum_0, seg_sum_gt)
+                seg_mean_diff_1 = F.mse_loss(comp_seg_sum_1, seg_sum_gt)
+            else:
+                seg_mean_diff_0 = mean_pairwise_absolute_difference(comp_seg_sum_0)
+                seg_mean_diff_1 = mean_pairwise_absolute_difference(comp_seg_sum_1)
 
             if self.hparams.fine_level_loss_only:
                 print('fine_level_only is deprecated!')
@@ -2164,12 +2173,17 @@ class LitNeRFSegArt(LitModel):
                 seg_cov = self.hparams.seg_cov_coef * (seg_cov0 + seg_cov1)
                 loss += seg_cov 
                 self.log("train/seg_cov_loss", seg_cov, on_step=True, logger=True)
-                
+            
             if self.hparams.use_seg_diff_loss:
                 seg_diff = self.hparams.seg_diff_coef * (seg_mean_diff_0 + seg_mean_diff_1)
                 loss += seg_diff
                 
                 self.log("train/seg_diff_loss", seg_diff, on_step=True, logger=True)
+
+            if self.hparams.use_seg_mask_loss:
+                seg_occ_loss *= self.hparams.seg_mask_loss_coef
+                loss += seg_occ_loss
+                self.log("train/seg_mask_loss", seg_occ_loss, on_step=True, logger=True)
 
         else:
             rgb_coarse = rendered_results['level_0']['rgb_seg']

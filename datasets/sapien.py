@@ -429,12 +429,14 @@ class SapienArtSegDataset(SapienDataset):
         self.meta_dict = self.read_meta()
         
         self.image_list = []
+        self.seg_list = []
         self.get_img_list()
 
         self.dirs = []
         self.c2w = []
         self.rgb = []
         self.mask = []
+        self.seg = []
         self.focal = None
         w, h = img_wh
         self.focal = self.meta_dict['focal']
@@ -458,7 +460,19 @@ class SapienArtSegDataset(SapienDataset):
         for k, v in frames.items():
             img_name = str(cur_path/'rgb'/(k+'.png'))
             self.image_list += [img_name]
+            self.seg_list += [str(cur_path/'seg'/(k+'.png'))]
         return
+
+    def load_seg(self, fname):
+        seg = np.array(Image.open(str(fname)))
+        seg = torch.from_numpy(seg)
+        seg = seg.type(torch.LongTensor)
+        seg = seg - 1 # part label start from 2
+        seg[seg<0] = 0 # recover background
+        seg = seg.view([-1])
+        # seg_one_hot = F.one_hot(seg, 3).to(torch.float32)
+
+        return seg
 
     def cache_data(self):
         dataset_path = P(self.root_dir)
@@ -467,6 +481,8 @@ class SapienArtSegDataset(SapienDataset):
         for k, v in frames.items():
             img_name = str(cur_path/'rgb'/(k+'.png'))
             img = self.transform(Image.open(img_name)).view(4, -1).permute(1, 0)
+            seg_name = str(cur_path/'seg'/(k+'.png'))
+            self.seg += [self.load_seg(seg_name)]
             valid_mask = (img[:, -1]).view([-1, 1])
             img = img[:, :3]*img[:, -1:] # use black background
             self.c2w += [torch.Tensor(np.array(v)).unsqueeze(0)] * img.shape[0]
@@ -480,6 +496,7 @@ class SapienArtSegDataset(SapienDataset):
         self.c2w = torch.cat(self.c2w, dim=0)
         self.rgb = torch.cat(self.rgb, dim=0)
         self.mask = torch.cat(self.mask, dim=0)
+        self.seg = torch.cat(self.seg, dim=0)
         return
     
     def cache_data_fg_only(self):
@@ -523,7 +540,8 @@ class SapienArtSegDataset(SapienDataset):
             'dirs': self.dirs[sample_idx],
             'c2w': self.c2w[sample_idx],
             'mask': self.mask[sample_idx],
-            'idx': sample_idx
+            'idx': sample_idx,
+            'seg_gt': self.seg[sample_idx]
         }
         return ret_dict
 
@@ -539,7 +557,8 @@ class SapienArtSegDataset(SapienDataset):
             'img': img,
             'c2w': c2w,
             'dirs': self.directions.view([-1, 3]),
-            'valid_mask': valid_mask
+            'valid_mask': valid_mask,
+            'seg_gt': self.load_seg(self.seg_list[idx])
         }
         return ret_dict
 
