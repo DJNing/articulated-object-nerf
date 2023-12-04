@@ -62,7 +62,7 @@ class ArticulationEstimation(nn.Module):
     Current implemetation for revolute only
     '''
     def __init__(self, mode='qua', perfect_init=False, hypothesis_radius=0.5, 
-                 hypo_samples=32, angle_range=5, radius_factor=0.5) -> None:
+                 hypo_samples=32, angle_range=5, radius_factor=0.5, base=False) -> None:
         super().__init__()
         if mode == 'qua':
             pass
@@ -80,8 +80,12 @@ class ArticulationEstimation(nn.Module):
             init_Q = torch.Tensor([0.97237, 0, -0.233445, 0]) # asset.set_qpos(np.inf * asset.dof)
             axis_origin = convert_ori_torch(torch.Tensor([0, -0.007706040424053753, -0.24714714808389615]))
         # normal init
+        elif base:
+            init_Q = torch.Tensor([1, 0, 0, 0])
+            axis_origin = torch.Tensor([0, 0, 0])
         else:
-            init_Q = sample_uniform_quaternions_torch(self.perfect_Q, 1, 1)
+            # init_Q = sample_uniform_quaternions_torch(self.perfect_Q, 1, 1)
+            init_Q = self.perfect_Q
             axis_origin = self._sample_points_on_sphere_torch(self.perfect_axis_origin, 0.5, 1)
 
         # axis angle can be obtained from quaternion
@@ -2049,6 +2053,15 @@ class LitNeRFSegArt(LitModel):
             else:
                 new_c2w = self.art_list[i-1](c2w)
                 new_c2w_list += [new_c2w]
+
+                # log art est to check optimization
+                # art_est = self.art_list[i-1]
+                # gt_Q = art_est.perfect_Q
+                # gt_axis = art_est.perfect_axis_origin
+                # self.log('train/art_gt_Q_' + str(i), gt_Q, on_step=True)
+                # self.log('train/art_gt_T_' + str(i), gt_axis, on_step=True)
+                # self.log('train/art_est_Q_' + str(i), art_est.Q, on_step=True)
+                # self.log('train/art_est_T_' + str(i), art_est.axis_origin, on_step=True)
 
         part_code = torch.cat(part_code_list, dim=0)
 
