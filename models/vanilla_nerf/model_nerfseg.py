@@ -61,8 +61,8 @@ class ArticulationEstimation(nn.Module):
     '''
     Current implemetation for revolute only
     '''
-    def __init__(self, mode='qua', perfect_init=False, hypothesis_radius=0.5, 
-                 hypo_samples=32, angle_range=5, radius_factor=0.5, base=False) -> None:
+    def __init__(self, mode='qua', init_mode='GT', hypothesis_radius=0.5, 
+                 hypo_samples=32, angle_range=5, radius_factor=0.5) -> None:
         super().__init__()
         if mode == 'qua':
             pass
@@ -75,12 +75,12 @@ class ArticulationEstimation(nn.Module):
         
         self.perfect_Q = torch.Tensor([0.97237, 0, -0.233445, 0]) # asset.set_qpos(np.inf * asset.dof)
         self.perfect_axis_origin = convert_ori_torch(torch.Tensor([0, -0.007706040424053753, -0.24714714808389615]))
-        if perfect_init:
+        if init_mode.lower() == 'gt':
             # perfect init
             init_Q = torch.Tensor([0.97237, 0, -0.233445, 0]) # asset.set_qpos(np.inf * asset.dof)
             axis_origin = convert_ori_torch(torch.Tensor([0, -0.007706040424053753, -0.24714714808389615]))
         # normal init
-        elif base:
+        elif init_mode.lower() == 'id':
             init_Q = torch.Tensor([1, 0, 0, 0])
             axis_origin = torch.Tensor([0, 0, 0])
         else:
@@ -1577,7 +1577,7 @@ class LitNeRFSegArt(LitModel):
         self.art_list = []
         art_args_dict = {
             'mode': 'qua', 
-            'perfect_init': self.hparams.perfect_init,
+            'init_mode': self.hparams.init_mode,
             'hypothesis_radius': self.hparams.hypothesis_radius,
             'hypo_samples': self.hparams.hypothesis_samples,
             'radius_factor': self.hparams.hypothesis_radius_scaling

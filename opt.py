@@ -234,7 +234,7 @@ def get_parser():
     parser.add_argument('--rgb_activation', type=bool, default=False, help="whether to use rgb_activation")
     parser.add_argument('--scan_density', type=bool, default=False, help="whether to scan the nerf space to save density for visualization")
     parser.add_argument('--grid_num', type=int, default=256, help="number of grids used for density scan")
-    parser.add_argument('--perfect_init', type=bool, default=False, help="initialize the pose estimation with ground truth")
+    parser.add_argument('--init_mode', type=str, default='ID', help="how to initialize the pose estimation, options: GT, ID, random")
     parser.add_argument('--near', type=int, default=2, help="near plane")
     parser.add_argument('--far', type=int, default=9, help="far plane")
     parser.add_argument('--fine_level_loss_only', type=bool, default=False, help="whether we only fit with the fine-level loss")
