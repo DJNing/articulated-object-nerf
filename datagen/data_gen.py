@@ -21,6 +21,7 @@ def parse_args():
     parser.add_argument("--art_seg_data", type=bool, default=False, help="whether to set all qpos to their upper limit")
     parser.add_argument("--radius", type=int, default=4, help="camera distance to the origin")
     parser.add_argument("--q_pos", type=float, nargs="+", default=None, help="specify q_pos to the object")
+    parser.add_argument("--train_num", type=int, nargs=100, default=None, help="specify q_pos to the object")
     # Load and parse the JSON configuration file
     with open(args.config, "r") as config_file:
         config_data = json.load(config_file)
@@ -99,7 +100,7 @@ def main(args):
             generate_img_with_pose(args.render_pose_path, split, camera, asset, scene, object_path=output_path)
     elif args.art_seg_data:
         # set qpos to max
-        gen_articulated_object_nerf_s2(30, args.radius, 'train', camera, asset, scene, object_path=output_path, \
+        gen_articulated_object_nerf_s2(args.train_num, args.radius, 'train', camera, asset, scene, object_path=output_path, \
         render_pose_file_dir=args.save_render_pose_path, q_pos=qpos)
         gen_articulated_object_nerf_s2(20, args.radius, 'val', camera, asset, scene, object_path=output_path, \
         render_pose_file_dir=args.save_render_pose_path, q_pos=qpos)

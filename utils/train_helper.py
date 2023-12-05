@@ -193,7 +193,7 @@ def visualize_val_rgb_seg(img_wh, batch, results):
     return img
 
 
-def visualize_val_rgb_opa_depth(img_wh, batch, results):
+def visualize_val_rgb_opa_depth(img_wh, batch, results) -> Image:
     W, H = img_wh
 
     rgbs = batch["target"]

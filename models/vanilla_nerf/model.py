@@ -11,6 +11,8 @@
 import os
 from random import random
 from typing import *
+
+from pytorch_lightning.utilities.types import EPOCH_OUTPUT
 from datasets import dataset_dict
 from torch.utils.data import DataLoader
 import numpy as np
@@ -550,12 +552,15 @@ class LitNeRF(LitModel):
         ret = self.render_rays(batch, batch_idx)
         # rank = dist.get_rank()
         rank = 0
-        if rank == 0:
-            if batch_idx == self.random_batch:
-                grid_img = visualize_val_rgb_opa_depth((W, H), batch, ret)
-                self.logger.experiment.log({"val/GT_pred rgb": wandb.Image(grid_img)})
+        # if rank == 0:
+        #     if batch_idx == self.random_batch:
+        grid_img = visualize_val_rgb_opa_depth((W, H), batch, ret)
+        # self.logger.experiment.log({"val/GT_pred rgb": wandb.Image(grid_img)})
 
-        return self.render_rays(batch, batch_idx)
+        return grid_img
+    
+    def validation_epoch_end(self, outputs):
+        self.logger.log_image(key='val/gt_preds', images=outputs)
 
     def test_step(self, batch, batch_idx):
         for k, v in batch.items():

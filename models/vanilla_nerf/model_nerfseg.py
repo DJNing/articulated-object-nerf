@@ -25,7 +25,7 @@ from utils.rotation import R_from_quaternions
 
 from torch.quasirandom import SobolEngine
 from scipy.spatial.transform import Rotation
-
+import matplotlib.pyplot as plt
 
 torch.backends.cudnn.deterministic = True
 torch.backends.cudnn.benchmark = False
@@ -1550,9 +1550,10 @@ class LitNeRFSegArt(LitModel):
         hparams,
         lr_init: float = 1.0e-1,
         lr_final: float = 5.0e-5,
-        lr_delay_steps: int = 2500,
+        lr_delay_steps: int = 500,
         lr_delay_mult: float = 0.01,
         randomized: bool = True,
+        lr_art: float = 1e-2,
     ):
         for name, value in vars().items():
             if name not in ["self", "__class__", "hparams"]:
@@ -1563,7 +1564,7 @@ class LitNeRFSegArt(LitModel):
         self.hparams.white_back = False
         
         self.model = NeRFSeg(self.hparams)
-
+        self.lr_art = lr_art
         if self.hparams.run_eval:
             # ckpt_path = self.hparams.cktp_path
             helper.load_state_dict_and_report(self, self.hparams.ckpt_path)
@@ -1589,8 +1590,6 @@ class LitNeRFSegArt(LitModel):
             self.one_hot_loss = OneHotLoss()
         else:
             self.one_hot_loss = None
-
-
 
         pass
 
@@ -1692,8 +1691,29 @@ class LitNeRFSegArt(LitModel):
         scaled_lr = np.exp(np.log(self.lr_init) * (1 - t) + np.log(self.lr_final) * t)
         new_lr = delay_rate * scaled_lr
 
+        if self.lr_delay_steps > 0:
+            art_delat_steps = self.lr_delay_steps + 200
+            delay_rate_art = art_delat_steps + (1 - art_delat_steps) * np.sin(
+                0.5 * np.pi * np.clip(step / art_delat_steps, 0, 1)
+            )
+        else:
+            delay_rate = 1.0
+
+        def get_new_lr(lr, delay_rate):
+            scaled_lr_art = np.exp(np.log(lr) * (1 - t) + np.log(lr) * t)
+            new_lr = delay_rate * scaled_lr_art
+            return new_lr
+
+        # scaled_lr_art = np.exp(np.log(self.lr_art) * (1 - t) + np.log(self.lr_final) * t)
+        # new_lr_art = delay_rate_art * scaled_lr_art
+
         for pg in optimizer.param_groups:
-            pg["lr"] = new_lr
+            if pg['name'] == 'seg':
+                pg["lr"] = new_lr
+            else:
+                lr_old = pg['lr']
+                lr_new = get_new_lr(lr_old, delay_rate_art)
+                pg['lr'] = lr_new
         optimizer.step(closure=optimizer_closure)
 
     def configure_optimizers(self):
@@ -1703,22 +1723,35 @@ class LitNeRFSegArt(LitModel):
                 seg_params += [param]
 
         art_params = []
+        art_params_Q = []
+        art_params_T = []
         for art_est in self.art_list:
             if art_est is not None:
                 for _, param in art_est.named_parameters():
                     param.requires_grad = True
-                    art_params += [param]
+                    if len(param) == 4:
+                        art_params_Q += [param]
+                    else:
+                        art_params_T += [param]
+                    # art_params += [param]
         seg_opt_dict = {
             'params': seg_params,
-            'lr': self.lr_init
+            'lr': self.lr_init,
+            'name': 'seg'
         }
 
-        art_opt_dict = {
-            'params': art_params,
-            'lr': 1e-4
+        art_opt_Q_dict = {
+            'params': art_params_Q,
+            'lr': self.lr_art*10,
+            'name': 'art_Q'
+        }
+        art_opt_T_dict = {
+            'params': art_params_T,
+            'lr': self.lr_art,
+            'name': 'art_T'
         }
         return torch.optim.Adam(
-            params=[seg_opt_dict, art_opt_dict], lr=self.lr_init, betas=(0.9, 0.999)
+            params=[seg_opt_dict, art_opt_T_dict, art_opt_Q_dict], lr=self.lr_init, betas=(0.9, 0.999)
             )
 
     def get_part_code(self, ray_num, i):
@@ -2278,10 +2311,19 @@ class LitNeRFSegArt(LitModel):
         self.log("train/loss", loss, on_step=True)
 
         opts = self.optimizers()
+        
         for pg in opts.param_groups:
-            lr = pg['lr']
+            if pg['name'] == 'seg':
+                seg_lr = pg['lr']
+            elif pg['name'] == 'art_Q':
+                art_lr_Q = pg['lr']
+            else:
+                art_lr_T = pg['lr']
 
-        self.log('train/lr', lr, on_step=True, prog_bar=True, logger=True)
+        self.log('train/seg_lr', seg_lr, on_step=True, prog_bar=False, logger=True)
+        self.log('train/art_lr_Q', art_lr_Q, on_step=True, prog_bar=True, logger=True)
+        
+        self.log('train/art_lr_T', art_lr_T, on_step=True, prog_bar=True, logger=True)
         return loss
 
     def training_epoch_end(self, outputs: EPOCH_OUTPUT) -> None:
@@ -2385,6 +2427,7 @@ class LitNeRFSegArt(LitModel):
         rgb_results = []
         opacity_results = []
         depth_results = []
+        seg_results = []
         for i in range(0, N, chunk_size):
             # Get a minibatch of data
             start_idx = i
@@ -2402,14 +2445,17 @@ class LitNeRFSegArt(LitModel):
             
             opacity_results.append(minibatch_result['level_1']['opacity'])
             depth_results.append(minibatch_result['level_1']['depth'])
+            seg_results.append(minibatch_result['level_1']['comp_seg'])
 
         final_rgb = torch.cat(rgb_results, dim=0)
         final_opacity = torch.cat(opacity_results, dim=0)
         final_depth = torch.cat(depth_results, dim=0)
+        final_seg = torch.cat(seg_results, dim=0)
         ret_dict = {
             'rgb': final_rgb,
             'opacity': final_opacity,
-            'depth': final_depth
+            'depth': final_depth,
+            'comp_seg': final_seg
         }
         return ret_dict
     
@@ -2489,40 +2535,42 @@ class LitNeRFSegArt(LitModel):
                 "directions":self.directions
             }
         """
-        if self.sanity_check:
-            return
+        # if self.sanity_check:
+        #     return
         for k, v in batch.items():
             if k == "obj_idx":
                 continue
             batch[k] = v.squeeze(0)
         # img_list = self.render_img(batch)
-        ret_dict = self.render_img(batch)
+        render_dict = self.render_img(batch)
         if self.hparams.composite_rendering:
-            rgb = ret_dict['rgb']
-            opacity = ret_dict['opacity']
-            depth = ret_dict['depth']
+            rgb = render_dict['rgb']
+            opacity = render_dict['opacity']
+            depth = render_dict['depth']
             rgb_target = batch['img']
             rgb_loss = helper.img2mse(rgb, rgb_target)
             psnr = helper.mse2psnr(rgb_loss)
-            ret_dict = {
-                "img": batch['img'],
-                "rgb": rgb,
-                "depth": depth,
-                "opacity": opacity,
-                "valid_mask": batch.get('valid_mask', None)
-            }
+            # ret_dict = {
+            #     "img": batch['img'],
+            #     "rgb": rgb,
+            #     "depth": depth,
+            #     "opacity": opacity,
+            #     "valid_mask": batch.get('valid_mask', None)
+            # }
             ret_dict = {
                 'rgb': rgb,
                 'img': batch['img'],
                 'psnr': psnr,
                 'loss': rgb_loss,
                 'opacity': opacity,
-                'valid_mask': batch.get('valid_mask', None)
+                'valid_mask': batch.get('valid_mask', None),
+                'seg_gt': batch.get('seg_gt', None),
+                'seg_pred': render_dict['comp_seg']
             }
         else:
-            img_list = ret_dict["part_img"]
-            opacity = ret_dict["opacity"]
-            depth = ret_dict["depth"]
+            img_list = render_dict["part_img"]
+            opacity = render_dict["opacity"]
+            depth = render_dict["depth"]
             final_img = compose_img_by_depth(img_list, depth).view([-1, 3])
             # torch.save(ret_dict, "image_composition/tensor_dict.pt")
             # final_img = torch.cat(img_list, dim=0).sum(dim=0).view([-1, 3])
@@ -2547,8 +2595,8 @@ class LitNeRFSegArt(LitModel):
         self.sanity_check = False
 
     def validation_epoch_end(self, outputs):
-        if self.sanity_check:
-            return
+        # if self.sanity_check:
+        #     return
         psnr = sum(ret['psnr'] for ret in outputs) / len(outputs)
         self.log("val/psnr", psnr, on_epoch=True)
         
@@ -2558,15 +2606,35 @@ class LitNeRFSegArt(LitModel):
                 img = tensor.view(h, w, c).permute(2, 0, 1).cpu()
                 pil_img = T.ToPILImage()(img)
                 return pil_img
-            
+            def segToImg(tensor, h, w):
+                seg = tensor.view(h, w, -1)
+                seg_channel = seg.shape[-1]
+                if seg_channel > 1:
+                    # convert to label int
+                    v, i = seg.max(dim=-1, keepdim=True)
+                    v[v< 0.5] = -1
+                    v[v > 0.5] = 0
+                    i_final = i + 1 + v
+                    seg = i_final
+                seg = seg.view(h, w).cpu().numpy().astype(np.int64)
+                cm = plt.get_cmap('Pastel1')
+                colored_array = cm(seg)
+                colored_array[seg==0] = 0
+                colored_array[:, :, -1] = 1
+                image = Image.fromarray((colored_array * 255).astype(np.uint8))
+                return image
             gt_list = [toPIL(output['img'], H, W) for output in outputs]
             img_list = [toPIL(output['rgb'], H, W) for output in outputs]
+            gt_seg_list = [segToImg(output['seg_gt'], H, W) for output in outputs]
+            pred_seg_list = [segToImg(output['seg_pred'], H, W) for output in outputs]
             if self.sanity_check:
                 log_key = "val/sanity_check"
             else:
                 log_key = "val/results"
             self.logger.log_image(key=log_key+'/gt_%d'%self.local_rank, images=gt_list)
             self.logger.log_image(key=log_key+'/pred_%d'%self.local_rank, images=img_list)
+            self.logger.log_image(key=log_key+'/gt_seg_%d'%self.local_rank, images=gt_seg_list)
+            self.logger.log_image(key=log_key+'/pred_seg_%d'%self.local_rank, images=pred_seg_list)
         else:
             log_idx = torch.randint(low=0, high=len(outputs), size=(1,))
             log_output = outputs[log_idx[0]]

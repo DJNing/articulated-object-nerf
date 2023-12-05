@@ -40,7 +40,9 @@ def main(hparams):
         )
     elif hparams.exp_type == "nerf_artseg":
         system = LitNeRFSegArt(
-            hparams=hparams
+            hparams=hparams,
+            lr_init=hparams.lr_init,
+            lr_art=hparams.lr_art
         )
     result_path = P(hparams.output_path) / hparams.exp_name
     result_path.mkdir(parents=True, exist_ok=True)

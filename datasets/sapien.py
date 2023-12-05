@@ -131,7 +131,7 @@ class SapienDataset(Dataset):
         if self.split == 'train':
             return len(self.all_rays)
         if self.split == 'val':
-            return 1 # only validate 8 images (to support <=8 gpus)
+            return 8 # only validate 8 images (to support <=8 gpus)
         else:
             return len(self.img_files_val) # return for testset
 

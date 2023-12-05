@@ -254,6 +254,8 @@ def get_parser():
     parser.add_argument('--use_seg_diff_gt', type=bool, default=True, help="use segmentation GT for seg_diff loss")
     parser.add_argument('--use_seg_mask_loss', type=bool, default=True, help="use segmentation GT for seg_diff loss")
     parser.add_argument('--seg_mask_loss_coef', type=float, default=1, help="use segmentation GT for seg_diff loss")
+    parser.add_argument('--lr_art', type=float, default=1e-3, help="learning rate for pose estimation")
+    parser.add_argument('--lr_init', type=float, default=1e-3, help="learning rate for others")
     
     return parser
 
