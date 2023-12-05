@@ -1699,21 +1699,24 @@ class LitNeRFSegArt(LitModel):
         else:
             delay_rate = 1.0
 
-        def get_new_lr(lr, delay_rate):
-            scaled_lr_art = np.exp(np.log(lr) * (1 - t) + np.log(lr) * t)
-            new_lr = delay_rate * scaled_lr_art
-            return new_lr
-
-        # scaled_lr_art = np.exp(np.log(self.lr_art) * (1 - t) + np.log(self.lr_final) * t)
-        # new_lr_art = delay_rate_art * scaled_lr_art
-
+        
+        
+        
+        scaled_lr_art = np.exp(np.log(self.lr_art) * (1 - t) + np.log(self.lr_final) * t)
+        new_lr_art = delay_rate_art * scaled_lr_art
+        
+        lr_T = new_lr_art
+        lr_Q = new_lr_art * 10
+        
         for pg in optimizer.param_groups:
             if pg['name'] == 'seg':
                 pg["lr"] = new_lr
+            elif pg['name'] == 'art_Q':
+                pg['lr'] = lr_Q
             else:
-                lr_old = pg['lr']
-                lr_new = get_new_lr(lr_old, delay_rate_art)
-                pg['lr'] = lr_new
+                pg['lr'] = lr_T
+        # for pg in optimizer.param_groups:
+        #     pg["lr"] = new_lr
         optimizer.step(closure=optimizer_closure)
 
     def configure_optimizers(self):
