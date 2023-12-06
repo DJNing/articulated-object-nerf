@@ -257,6 +257,8 @@ def get_parser():
     parser.add_argument('--lr_art', type=float, default=1e-3, help="learning rate for pose estimation")
     parser.add_argument('--lr_art_separate', type=bool, default=False, help="learning rate for others")
     parser.add_argument('--lr_init', type=float, default=1e-3, help="learning rate for others")
+    parser.add_argument('--freeze_Q', type=bool, default=False, help="learning rate for others")
+    parser.add_argument('--freeze_T', type=bool, default=False, help="learning rate for others")
     
     return parser
 

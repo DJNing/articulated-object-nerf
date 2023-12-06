@@ -61,7 +61,7 @@ class ArticulationEstimation(nn.Module):
     '''
     Current implemetation for revolute only
     '''
-    def __init__(self, mode='qua', init_mode='GT', hypothesis_radius=0.5, 
+    def __init__(self, hparam, mode='qua', init_mode='GT', hypothesis_radius=0.5, 
                  hypo_samples=32, angle_range=5, radius_factor=0.5) -> None:
         super().__init__()
         if mode == 'qua':
@@ -88,11 +88,19 @@ class ArticulationEstimation(nn.Module):
             init_Q = self.perfect_Q
             axis_origin = self._sample_points_on_sphere_torch(self.perfect_axis_origin, 0.5, 1)
 
+
         # axis angle can be obtained from quaternion
         # axis_direction = torch.Tensor([0, 0, 0])
 
-        self.Q = nn.Parameter(init_Q, requires_grad = True)
-        self.axis_origin = nn.Parameter(axis_origin, requires_grad = True)
+        if hparam.freeze_Q:
+            self.Q = nn.Parameter(self.perfect_Q, requires_grad = False)
+        else:
+            
+            self.Q = nn.Parameter(init_Q, requires_grad = True)
+        if hparam.freeze_T:
+            self.axis_origin = nn.Parameter(self.perfect_axis_origin, requires_grad = True)
+        else:
+            self.axis_origin = nn.Parameter(axis_origin, requires_grad = True)
         # self.axis_direction = nn.Parameter(axis_direction, requires_grad = True)
         self.hypo_pos = None
         self.hypo_Q = None
@@ -1577,6 +1585,7 @@ class LitNeRFSegArt(LitModel):
         self.lr_final = self.hparams.lr_final
         self.art_list = []
         art_args_dict = {
+            'hparam': self.hparams,
             'mode': 'qua', 
             'init_mode': self.hparams.init_mode,
             'hypothesis_radius': self.hparams.hypothesis_radius,
@@ -1693,7 +1702,7 @@ class LitNeRFSegArt(LitModel):
 
         if self.lr_delay_steps > 0:
             art_delat_steps = self.lr_delay_steps + 200
-            delay_rate_art = art_delat_steps + (1 - art_delat_steps) * np.sin(
+            delay_rate_art = self.lr_delay_mult*0.1 + (1 - self.lr_delay_mult*0.1) * np.sin(
                 0.5 * np.pi * np.clip(step / art_delat_steps, 0, 1)
             )
         else:
@@ -1748,18 +1757,28 @@ class LitNeRFSegArt(LitModel):
             lr_Q = self.lr_art * 10
         else:
             lr_Q = self.lr_art
-        art_opt_Q_dict = {
-            'params': art_params_Q,
-            'lr': lr_Q,
-            'name': 'art_Q'
-        }
-        art_opt_T_dict = {
-            'params': art_params_T,
-            'lr': self.lr_art,
-            'name': 'art_T'
-        }
+            
+
+        opt_params = [seg_opt_dict]
+        if not self.hparams.freeze_Q:
+            
+            art_opt_Q_dict = {
+                'params': art_params_Q,
+                'lr': lr_Q,
+                'name': 'art_Q'
+            }
+            opt_params += [art_opt_Q_dict]
+            
+        if not self.hparams.freeze_T:
+            art_opt_T_dict = {
+                'params': art_params_T,
+                'lr': self.lr_art,
+                'name': 'art_T'
+            }
+            opt_params += [art_opt_T_dict]
+            
         return torch.optim.Adam(
-            params=[seg_opt_dict, art_opt_T_dict, art_opt_Q_dict], lr=self.lr_init, betas=(0.9, 0.999)
+            params=opt_params, lr=self.lr_init, betas=(0.9, 0.999)
             )
 
     def get_part_code(self, ray_num, i):
@@ -2329,9 +2348,10 @@ class LitNeRFSegArt(LitModel):
                 art_lr_T = pg['lr']
 
         self.log('train/seg_lr', seg_lr, on_step=True, prog_bar=False, logger=True)
-        self.log('train/art_lr_Q', art_lr_Q, on_step=True, prog_bar=True, logger=True)
-        
-        self.log('train/art_lr_T', art_lr_T, on_step=True, prog_bar=True, logger=True)
+        if not self.hparams.freeze_Q:
+            self.log('train/art_lr_Q', art_lr_Q, on_step=True, prog_bar=True, logger=True)
+        if not self.hparams.freeze_T:
+            self.log('train/art_lr_T', art_lr_T, on_step=True, prog_bar=True, logger=True)
         return loss
 
     def training_epoch_end(self, outputs: EPOCH_OUTPUT) -> None:
