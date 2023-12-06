@@ -1711,7 +1711,9 @@ class LitNeRFSegArt(LitModel):
         for pg in optimizer.param_groups:
             if pg['name'] == 'seg':
                 pg["lr"] = new_lr
-            elif pg['name'] == 'art_Q':
+                
+        if self.hparams.lr_art_separate:
+            if pg['name'] == 'art_Q':
                 pg['lr'] = lr_Q
             else:
                 pg['lr'] = lr_T
@@ -1742,10 +1744,13 @@ class LitNeRFSegArt(LitModel):
             'lr': self.lr_init,
             'name': 'seg'
         }
-
+        if self.hparams.lr_art_separate:
+            lr_Q = self.lr_art * 10
+        else:
+            lr_Q = self.lr_art
         art_opt_Q_dict = {
             'params': art_params_Q,
-            'lr': self.lr_art*10,
+            'lr': lr_Q,
             'name': 'art_Q'
         }
         art_opt_T_dict = {
