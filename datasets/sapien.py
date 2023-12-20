@@ -442,9 +442,9 @@ class SapienArtSegDataset(SapienDataset):
         self.focal = self.meta_dict['focal']
         self.directions = \
             get_ray_directions(h, w, self.focal) # (h, w, 3)
-        if self.split == 'train':
+        # if self.split == 'train':
             # self.cache_data_fg_only()
-            self.cache_data()
+        self.cache_data()
 
     def read_meta(self):
         dataset_path = P(self.root_dir)
@@ -568,3 +568,64 @@ class SapienArtSegDataset(SapienDataset):
             return self._get_train_item(idx)
         else:
             return self._get_test_item(idx)
+        
+
+class SapienArtSegDataset_v2(SapienArtSegDataset):
+    def __init__(self, root_dir, split='train', img_wh=(320, 240), model_type=None, white_back=None, eval_inference=None, record_hard_sample=False, near=2, far=6):
+        super().__init__(root_dir, split, img_wh, model_type, white_back, eval_inference, record_hard_sample, near, far)
+        self.ray_sampling_strategy = 'all_images'
+        self.batch_size = 2048
+
+    def cache_data(self):
+        dataset_path = P(self.root_dir)
+        cur_path = dataset_path / self.split
+        frames = self.meta_dict['frames']
+        for k, v in frames.items():
+            img_name = str(cur_path/'rgb'/(k+'.png'))
+            img = self.transform(Image.open(img_name)).view(4, -1).permute(1, 0)
+            seg_name = str(cur_path/'seg'/(k+'.png'))
+            self.seg += [self.load_seg(seg_name)]
+            valid_mask = (img[:, -1]).view([-1, 1])
+            img = img[:, :3]*img[:, -1:] # use black background
+            self.poses += [torch.Tensor(np.array(v)).unsqueeze(0)]
+            self.c2w += [torch.Tensor(np.array(v)).unsqueeze(0).repeat(img.shape[0], 1, 1)]
+            self.rgb += [img]
+            self.mask += [valid_mask]
+        
+        num_img = len(frames.keys())
+        self.dirs = [self.directions.view(-1, 3)] * num_img
+
+        self.dirs = torch.stack(self.dirs, dim=0)
+        self.c2w = torch.stack(self.c2w, dim=0)
+        self.rgb = torch.stack(self.rgb, dim=0)
+        self.mask = torch.stack(self.mask, dim=0)
+        self.seg = torch.stack(self.seg, dim=0)
+        self.poses = torch.stack(self.poses, dim=0)
+        return
+    
+    def __len__(self):
+        if self.split == 'train':
+            return 1000
+        else:
+            return len(self.image_list)
+
+    def _get_idx(self):
+        if self.ray_sampling_strategy == 'all_images': # randomly select images
+            img_idxs = np.random.choice(len(self.poses), self.batch_size)
+        elif self.ray_sampling_strategy == 'same_image': # randomly select ONE image
+            img_idxs = np.random.choice(len(self.poses), 1)[0]
+        # randomly select pixels
+        pix_idxs = np.random.choice(self.img_wh[0]*self.img_wh[1], self.batch_size)
+        return img_idxs, pix_idxs
+
+    def _get_train_item(self, idx):
+        img_idxs, pix_idxs = self._get_idx()
+        ret_dict = {
+            'rgb': self.rgb[img_idxs, pix_idxs],
+            'dirs': self.dirs[img_idxs, pix_idxs],
+            'c2w': self.c2w[img_idxs, pix_idxs],
+            'mask': self.mask[img_idxs, pix_idxs],
+            'idx': [img_idxs, pix_idxs],
+            'seg_gt': self.seg[img_idxs, pix_idxs]
+        }
+        return ret_dict

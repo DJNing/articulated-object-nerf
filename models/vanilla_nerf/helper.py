@@ -16,7 +16,7 @@ import torch.nn.functional as F
 
 def load_state_dict_and_report(model, ckpt_file):
     # Load the checkpoint file
-    checkpoint = torch.load(ckpt_file)  # Use 'map_location' to load on CPU if needed
+    checkpoint = torch.load(ckpt_file, map_location='cpu')  # Use 'map_location' to load on CPU if needed
 
     # Get the state_dict from the checkpoint
     pretrained_state_dict = checkpoint['state_dict']

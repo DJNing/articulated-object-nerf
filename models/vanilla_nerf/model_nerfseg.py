@@ -90,16 +90,16 @@ class ArticulationEstimation(nn.Module):
 
         if init_mode.lower() == 'gt':
             # perfect init
-            init_Q = torch.Tensor([0.93937271, 0.        , 0.34289781,  0.]) # asset.set_qpos(np.inf * asset.dof)
-            axis_origin = convert_ori_torch(torch.Tensor([0, 0.10500870623151695, -0.752066445189761]))
+            init_Q = self.perfect_Q
+            axis_origin = self.perfect_axis_origin
         # normal init
         elif init_mode.lower() == 'id':
-            init_Q = torch.Tensor([0.5, 0.5, 0.5, 0.5])
+            init_Q = torch.Tensor([1, 0, 0, 0])
             axis_origin = torch.Tensor([0, 0, 0])
         else:
             # init_Q = sample_uniform_quaternions_torch(self.perfect_Q, 1, 1)
-            init_Q = self.perfect_Q
-            axis_origin = self._sample_points_on_sphere_torch(self.perfect_axis_origin, 0.5, 1)
+            init_Q = torch.Tensor([1, 0, 0, 0])
+            axis_origin = torch.Tensor([0, 0, 0])
 
 
         # axis angle can be obtained from quaternion
@@ -1755,7 +1755,7 @@ class LitNeRFSegArt(LitModel):
             self.train_dataset,
             shuffle=True,
             num_workers=4,
-            batch_size=self.hparams.batch_size,
+            batch_size=None,
             pin_memory=True,
         )
 
@@ -2167,9 +2167,9 @@ class LitNeRFSegArt(LitModel):
 
             if self.hparams.use_seg_mask_loss:
                 seg_occ_loss *= self.hparams.seg_mask_loss_coef
-                if self.opt_seg:
-                    loss += seg_occ_loss
-                    self.log("train/seg_mask_loss", seg_occ_loss, on_step=True, logger=True)
+                # if self.opt_seg:
+                loss += seg_occ_loss
+                self.log("train/seg_mask_loss", seg_occ_loss, on_step=True, logger=True)
 
         else:
             rgb_coarse = rendered_results['level_0']['rgb_seg']
@@ -2280,7 +2280,7 @@ class LitNeRFSegArt(LitModel):
     def training_step(self, batch, batch_idx):
 
         for k, v in batch.items():
-            if k == "obj_idx":
+            if k == "obj_idx" or k == 'idx':
                 continue
             batch[k] = v.squeeze(0)
         # if self.global_step != 0:
@@ -2679,9 +2679,9 @@ class LitNeRFSegArt(LitModel):
             img_list = [toPIL(output['rgb'], H, W) for output in outputs]
             gt_seg_list = [segToImg(output['seg_gt'], H, W) for output in outputs]
             pred_seg_list = [segToImg(output['seg_pred'], H, W) for output in outputs]
-            if not self.sanity_check:
-                torch.save(outputs[0]['seg_gt'], 'draft/seg_gt_%d.pt'%self.global_step)
-                torch.save(outputs[0]['seg_pred'], 'draft/seg_pred_%d.pt'%self.global_step)
+            # if not self.sanity_check:
+            #     torch.save(outputs[0]['seg_gt'], 'draft/seg_gt_%d.pt'%self.global_step)
+            #     torch.save(outputs[0]['seg_pred'], 'draft/seg_pred_%d.pt'%self.global_step)
             # raise RuntimeError
             if self.sanity_check:
                 log_key = "val/sanity_check"
