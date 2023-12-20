@@ -8,3 +8,9 @@ draft*
 *.gif
 report
 image_composition*
+ckpts
+config
+data
+data_base
+visualization
+wandb
