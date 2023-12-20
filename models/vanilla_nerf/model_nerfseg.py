@@ -19,6 +19,7 @@ from utils.train_helper import *
 from models.vanilla_nerf.util import *
 from models.interface import LitModel
 import wandb
+from torch.nn.utils import weight_norm
 import random
 from utils.viewpoint import view2pose_torch, pose2view_torch, change_apply_change_basis_torch, view2pose_torch_batch, pose2view_torch_batch, convert_ori_torch
 from utils.rotation import R_from_quaternions
@@ -72,16 +73,28 @@ class ArticulationEstimation(nn.Module):
             pass
         else:
             raise RuntimeError('mode == %s for ArticulationEstimation is not defined' % mode)
+        if hparam.obj_type == 'laptop':
+            self.perfect_Q = torch.Tensor([0.97237, 0, -0.233445, 0]) # asset.set_qpos(np.inf * asset.dof)
+            self.perfect_axis_origin = convert_ori_torch(torch.Tensor([0, -0.007706040424053753, -0.24714714808389615]))
+
+        # stapler
+        elif hparam.obj_type == 'stapler':
+            self.perfect_axis_origin = convert_ori_torch(torch.Tensor([0, 0.10500870623151695, -0.752066445189761]))
+
+            self.perfect_Q = torch.Tensor([0.93937271, 0.        , 0.34289781,  0.])
+        else:
+            self.perfect_axis_origin = torch.Tensor([0, 0, 0])
+            self.perfect_Q = torch.Tensor([1, 0, 0, 0])
+            raise RuntimeWarning('perfect initialization for obj type: %s is not supported!'%hparam.obj_type)
         
-        self.perfect_Q = torch.Tensor([0.97237, 0, -0.233445, 0]) # asset.set_qpos(np.inf * asset.dof)
-        self.perfect_axis_origin = convert_ori_torch(torch.Tensor([0, -0.007706040424053753, -0.24714714808389615]))
+
         if init_mode.lower() == 'gt':
             # perfect init
-            init_Q = torch.Tensor([0.97237, 0, -0.233445, 0]) # asset.set_qpos(np.inf * asset.dof)
-            axis_origin = convert_ori_torch(torch.Tensor([0, -0.007706040424053753, -0.24714714808389615]))
+            init_Q = torch.Tensor([0.93937271, 0.        , 0.34289781,  0.]) # asset.set_qpos(np.inf * asset.dof)
+            axis_origin = convert_ori_torch(torch.Tensor([0, 0.10500870623151695, -0.752066445189761]))
         # normal init
         elif init_mode.lower() == 'id':
-            init_Q = torch.Tensor([1, 0, 0, 0])
+            init_Q = torch.Tensor([0.5, 0.5, 0.5, 0.5])
             axis_origin = torch.Tensor([0, 0, 0])
         else:
             # init_Q = sample_uniform_quaternions_torch(self.perfect_Q, 1, 1)
@@ -98,7 +111,7 @@ class ArticulationEstimation(nn.Module):
             
             self.Q = nn.Parameter(init_Q, requires_grad = True)
         if hparam.freeze_T:
-            self.axis_origin = nn.Parameter(self.perfect_axis_origin, requires_grad = True)
+            self.axis_origin = nn.Parameter(self.perfect_axis_origin, requires_grad = False)
         else:
             self.axis_origin = nn.Parameter(axis_origin, requires_grad = True)
         # self.axis_direction = nn.Parameter(axis_direction, requires_grad = True)
@@ -139,42 +152,44 @@ class ArticulationEstimation(nn.Module):
 
         return points.to(origin)
     
-    def gen_hypothesis(self):
+    # def gen_hypothesis(self):
         
-        self.hypo_pos = self._sample_points_on_sphere_torch(self.axis_origin, self.hypo_radius, self.
-                                                            hypo_samples)
-        self.hypo_Q = sample_uniform_quaternions_torch(self.Q, self.hypo_samples, self.angle_range)
+    #     self.hypo_pos = self._sample_points_on_sphere_torch(self.axis_origin, self.hypo_radius, self.
+    #                                                         hypo_samples)
+    #     self.hypo_Q = sample_uniform_quaternions_torch(self.Q, self.hypo_samples, self.angle_range)
 
-        self.hypo_radius *= self.radius_factor
-        self.angle_range *= self.radius_factor
+    #     self.hypo_radius *= self.radius_factor
+    #     self.angle_range *= self.radius_factor
 
-    def forward_hypothesis(self, c2w, index):
-        hypo_Q = self.hypo_Q[index]
-        hypo_pos = self.hypo_pos[index]
-        E1 = view2pose_torch_batch(c2w)
-        translation_matrix = torch.eye(4).to(c2w)
-        translation_matrix[:3, 3] = hypo_pos.view([3])
-        rotation_matrix = torch.eye(4).to(c2w)
-        R = R_from_quaternions(hypo_Q)
-        rotation_matrix[:3, :3] = R
-        E2 = change_apply_change_basis_torch(E1, rotation_matrix, translation_matrix)
-        view = pose2view_torch_batch(E2)
-        return view
+    # def forward_hypothesis(self, c2w, index):
+    #     hypo_Q = self.hypo_Q[index]
+    #     hypo_pos = self.hypo_pos[index]
+    #     E1 = view2pose_torch_batch(c2w)
+    #     translation_matrix = torch.eye(4).to(c2w)
+    #     translation_matrix[:3, 3] = hypo_pos.view([3])
+    #     rotation_matrix = torch.eye(4).to(c2w)
+    #     R = R_from_quaternions(hypo_Q)
+    #     rotation_matrix[:3, :3] = R
+    #     E2 = change_apply_change_basis_torch(E1, rotation_matrix, translation_matrix)
+    #     view = pose2view_torch_batch(E2)
+    #     return view
 
-    def set_hypothesis(self, index):
-        self.Q = nn.Parameter(self.hypo_Q[index], requires_grad=True)
-        self.pos = nn.Parameter(self.hypo_pos[index], requires_grad=True)
-        self.clear_hypothesis()
+    # def set_hypothesis(self, index):
+    #     self.Q = nn.Parameter(self.hypo_Q[index], requires_grad=True)
+    #     self.pos = nn.Parameter(self.hypo_pos[index], requires_grad=True)
+    #     self.clear_hypothesis()
 
-    def clear_hypothesis(self):
-        self.hypo_Q = None
-        self.hypo_pos = None
+    # def clear_hypothesis(self):
+    #     self.hypo_Q = None
+    #     self.hypo_pos = None
 
 
     def forward(self, c2w) -> torch.Tensor():
         '''
         input: c2w
         '''
+        # with torch.inference_mode():
+        #     self.Q.data = F.normalize(self.Q, p=2, dim=0)
         E1 = view2pose_torch_batch(c2w)
         translation_matrix = torch.eye(4).to(c2w)
         translation_matrix[:3, 3] = self.axis_origin.view([3])
@@ -471,8 +486,82 @@ class NeRFSeg(nn.Module):
     #             combined_ret[level_key].update({k: torch.cat([v[level_key][k] for v in ret_list], dim=0)})
 
     #     return combined_ret
+    def warm_up_forward(self, rays, randomized, white_bkgd, near, far):
+        ret = {}
+        for i_level in range(self.num_levels):
+            if i_level == 0:
+                t_vals, samples = helper.sample_along_rays(
+                    rays_o=rays["rays_o"],
+                    rays_d=rays["rays_d"],
+                    num_samples=self.num_coarse_samples,
+                    near=near,
+                    far=far,
+                    randomized=randomized,
+                    lindisp=self.lindisp,
+                )
+                mlp = self.coarse_mlp
 
-    def forward_c2w(self, batch, randomized, white_bkgd, near, far):
+            else:
+                t_mids = 0.5 * (t_vals[..., 1:] + t_vals[..., :-1])
+                t_vals, samples = helper.sample_pdf(
+                    bins=t_mids,
+                    weights=weights[..., 1:-1],
+                    origins=rays["rays_o"],
+                    directions=rays["rays_d"],
+                    t_vals=t_vals,
+                    num_samples=self.num_fine_samples,
+                    randomized=randomized,
+                )
+                mlp = self.fine_mlp
+
+            samples_enc = helper.pos_enc(
+                samples,
+                self.min_deg_point,
+                self.max_deg_point,
+            )
+            viewdirs_enc = helper.pos_enc(rays["viewdirs"], 0, self.deg_view)
+
+            forward_dict = {
+                'x': samples_enc,
+                'condition': viewdirs_enc,
+                'part_code': None,
+                'pos_raw': samples
+            }
+
+            mlp_ret_dict = mlp(**forward_dict)
+            raw_rgb = mlp_ret_dict['raw_rgb']
+            raw_density = mlp_ret_dict['raw_density']
+            raw_seg = mlp_ret_dict['raw_seg']
+            if self.noise_std > 0 and randomized:
+                raw_sigma = raw_sigma + torch.rand_like(raw_sigma) * self.noise_std
+
+            rgb = self.rgb_activation(raw_rgb)
+            density = self.sigma_activation(raw_density)
+            seg = self.seg_activation(raw_seg)
+
+            render_dict = helper.volumetric_part_rendering(
+                rgb,
+                density,
+                t_vals,
+                rays["rays_d"],
+                white_bkgd,
+                seg
+            )
+
+            # ret.append((comp_rgb, acc, depth))
+            # result = {
+            #     "rgb": comp_rgb,
+            #     "opacity": acc,
+            #     "depth": depth,
+            #     "weight": weights
+            # }
+            weights = render_dict['seg_weights']
+            ret['level_' + str(i_level)] = render_dict
+
+        return ret
+
+
+    def forward_c2w(self, batch, randomized, white_bkgd, near, far, warm_up=False):
         '''
         Used during train time, transform each ray with corresponding c2w
         '''
@@ -484,7 +573,10 @@ class NeRFSeg(nn.Module):
             'viewdirs': viewdirs,
             'part_code': batch.get('part_code', None)
         }
-        render_dict = self.forward(rays, randomized, white_bkgd, near, far)
+        if warm_up:
+            render_dict = self.warm_up_forward(rays, randomized, white_bkgd, near, far)    
+        else:
+            render_dict = self.forward(rays, randomized, white_bkgd, near, far)
         return render_dict
 
     def forward_mlp(self, samples, viewdirs, part_code, randomized, mlp):
@@ -1558,7 +1650,7 @@ class LitNeRFSegArt(LitModel):
         hparams,
         lr_init: float = 1.0e-1,
         lr_final: float = 5.0e-5,
-        lr_delay_steps: int = 500,
+        lr_delay_steps: int = 100,
         lr_delay_mult: float = 0.01,
         randomized: bool = True,
         lr_art: float = 1e-2,
@@ -1580,7 +1672,6 @@ class LitNeRFSegArt(LitModel):
             # load pre-trained NeRF model
             if self.hparams.nerf_ckpt is not None:
                 helper.load_state_dict_and_report(self, self.hparams.nerf_ckpt)
-
         self.part_num = self.hparams.part_num
         self.lr_final = self.hparams.lr_final
         self.art_list = []
@@ -1592,14 +1683,25 @@ class LitNeRFSegArt(LitModel):
             'hypo_samples': self.hparams.hypothesis_samples,
             'radius_factor': self.hparams.hypothesis_radius_scaling
         }
+        self.table_q_list = []
+        self.table_t_list = []
         for _ in range(self.part_num - 1):
             self.art_list += [ArticulationEstimation(**art_args_dict)]
+            
+            # self.Q_err_table = wandb.Table(columns=['qw', 'qx', 'qy', 'qz'])
+            # self.T_err_table = wandb.Table(columns=['x', 'y', 'z'])
+            self.table_q_list += [wandb.Table(columns=['qw', 'qx', 'qy', 'qz'])]
+            self.table_t_list += [wandb.Table(columns=['x', 'y', 'z'])]
         
         if self.hparams.one_hot_loss:
             self.one_hot_loss = OneHotLoss()
         else:
             self.one_hot_loss = None
 
+        self.opt_seg = False
+        self.art_log_tables = []
+        for _ in self.art_list:
+            self.art_log_tables += []
         pass
 
     def setup(self, stage: Optional[str] = None) -> None:
@@ -1689,46 +1791,56 @@ class LitNeRFSegArt(LitModel):
         step = self.trainer.global_step
         max_steps = self.hparams.run_max_steps
 
-        if self.lr_delay_steps > 0:
-            delay_rate = self.lr_delay_mult + (1 - self.lr_delay_mult) * np.sin(
-                0.5 * np.pi * np.clip(step / self.lr_delay_steps, 0, 1)
-            )
-        else:
-            delay_rate = 1.0
+        delay_rate = 1.0
 
         t = np.clip(step / max_steps, 0, 1)
         scaled_lr = np.exp(np.log(self.lr_init) * (1 - t) + np.log(self.lr_final) * t)
         new_lr = delay_rate * scaled_lr
-
-        if self.lr_delay_steps > 0:
-            art_delat_steps = self.lr_delay_steps + 200
-            delay_rate_art = self.lr_delay_mult*0.1 + (1 - self.lr_delay_mult*0.1) * np.sin(
-                0.5 * np.pi * np.clip(step / art_delat_steps, 0, 1)
-            )
-        else:
-            delay_rate = 1.0
-
-        
-        
         
         scaled_lr_art = np.exp(np.log(self.lr_art) * (1 - t) + np.log(self.lr_final) * t)
-        new_lr_art = delay_rate_art * scaled_lr_art
+        new_lr_art = delay_rate * scaled_lr_art
         
-        lr_T = new_lr_art
-        lr_Q = new_lr_art * 10
-        
-        for pg in optimizer.param_groups:
-            if pg['name'] == 'seg':
-                pg["lr"] = new_lr
-                
-        if self.hparams.lr_art_separate:
-            if pg['name'] == 'art_Q':
-                pg['lr'] = lr_Q
+        # if step == self.lr_delay_steps:
+            # opt_params = []
+        local_steps = step - self.hparams.warm_up_steps
+        if local_steps < 0:
+            optimizer.step(closure=optimizer_closure)
+            return
+        elif local_steps == 0:
+            for pg in optimizer.param_groups:
+                if pg['name'] == 'art_Q':
+                    pg['lr'] = self.hparams.lr_art_Q * (0.9 ** (local_steps / 200))
+                elif pg['name'] == 'art_T':
+                    pg['lr'] == self.hparams.lr_art_T
+                if 'seg' in pg['name']:
+                    pg['lr'] = 0
+        elif local_steps % self.hparams.switching_steps == 0:
+            self.opt_seg = not self.opt_seg
+            if self.opt_seg:
+                for pg in optimizer.param_groups:
+                    if 'art' in pg['name']:
+                        pg['lr'] = 0
+                    if 'seg' in pg['name']:
+                        pg['lr'] = self.lr_init
             else:
-                pg['lr'] = lr_T
-        # for pg in optimizer.param_groups:
-        #     pg["lr"] = new_lr
+                for pg in optimizer.param_groups:
+                    if pg['name'] == 'art_Q':
+                        pg['lr'] = self.hparams.lr_art_Q
+                    elif pg['name'] == 'art_T':
+                        pg['lr'] == self.hparams.lr_art_T
+                    if 'seg' in pg['name']:
+                        pg['lr'] = 0
+
+        new_lr_Q = self.hparams.lr_art_Q * (0.5 ** (local_steps / 200))
+
+        for pg in optimizer.param_groups:
+            if pg['name'] == 'art_Q':
+                if pg['lr'] != 0:
+                    pg['lr'] = max(new_lr_Q, 1e-2)
+
         optimizer.step(closure=optimizer_closure)
+            
+        
 
     def configure_optimizers(self):
         seg_params = []
@@ -1742,7 +1854,7 @@ class LitNeRFSegArt(LitModel):
         for art_est in self.art_list:
             if art_est is not None:
                 for _, param in art_est.named_parameters():
-                    param.requires_grad = True
+                    # param.requires_grad = True
                     if len(param) == 4:
                         art_params_Q += [param]
                     else:
@@ -1754,29 +1866,59 @@ class LitNeRFSegArt(LitModel):
             'name': 'seg'
         }
         if self.hparams.lr_art_separate:
-            lr_Q = self.lr_art * 10
+            lr_Q = self.lr_art
         else:
             lr_Q = self.lr_art
             
 
         opt_params = [seg_opt_dict]
+
+        art_params_Q = []
+        art_params_T = []
+        for art_est in self.art_list:
+            if art_est is not None:
+                for _, param in art_est.named_parameters():
+                    # param.requires_grad = True
+                    if len(param) == 4:
+                        art_params_Q += [param]
+                    else:
+                        art_params_T += [param]
+        
         if not self.hparams.freeze_Q:
-            
+        
             art_opt_Q_dict = {
                 'params': art_params_Q,
-                'lr': lr_Q,
+                'lr': self.hparams.lr_art_Q,
                 'name': 'art_Q'
             }
             opt_params += [art_opt_Q_dict]
+            # optimizer.add_param_group(art_opt_Q_dict)
             
         if not self.hparams.freeze_T:
             art_opt_T_dict = {
                 'params': art_params_T,
-                'lr': self.lr_art,
+                'lr': self.hparams.lr_art_T,
                 'name': 'art_T'
             }
             opt_params += [art_opt_T_dict]
+            # optimizer.add_param_group(art_opt_T_dict)
+        # if not self.hparams.freeze_Q:
             
+        #     art_opt_Q_dict = {
+        #         'params': art_params_Q,
+        #         'lr': lr_Q,
+        #         'name': 'art_Q'
+        #     }
+        #     opt_params += [art_opt_Q_dict]
+            
+        # if not self.hparams.freeze_T:
+        #     art_opt_T_dict = {
+        #         'params': art_params_T,
+        #         'lr': self.lr_art,
+        #         'name': 'art_T'
+        #     }
+        #     opt_params += [art_opt_T_dict]
+        
         return torch.optim.Adam(
             params=opt_params, lr=self.lr_init, betas=(0.9, 0.999)
             )
@@ -1873,279 +2015,46 @@ class LitNeRFSegArt(LitModel):
                     self.art_list[art_id].clear_hypothesis()
         return
 
+    def get_warmup_loss(self, batch, render_results):
+        bceloss = torch.nn.BCELoss()
+        opa_loss_list = []
+        rgb_loss_list = []
+        nb_loss_list = [] # non-base loss
+        rgb_target = batch['rgb']
+        for i in range(2):
+            cur_key = 'level_' + str(i)
+            opa = render_results[cur_key]['acc']
+            rgb = render_results[cur_key]['comp_rgb']
+            
+            seg_opa = render_results[cur_key]['seg_opa']
+            opa_target = batch['mask'].squeeze(dim=-1)
+            seg_opa_clamped = torch.clamp(seg_opa, min=1e-7, max=1-1e-7)
+            valid_idx = opa > 0.5
+            if valid_idx.sum() == 0:
+                return None
+            pred = seg_opa_clamped[valid_idx]
+            gt = opa_target[valid_idx]
+            cur_opa_loss = bceloss(pred, gt)
 
-    def get_training_loss(self, batch, input_dict):
+            nb_gt = 1 - gt
+            nb_opa = torch.clamp(render_results[cur_key]['nb_opa'], min=1e-7, max=1-1e-7)
+            nb_pred = nb_opa[valid_idx]
+            nb_opa_loss = bceloss(nb_pred, nb_gt)
+
+            cur_rgb_loss = helper.img2mse(rgb[valid_idx], rgb_target[valid_idx])
+            rgb_loss_list += [cur_rgb_loss]
+            opa_loss_list += [cur_opa_loss]
+            nb_loss_list += [nb_opa_loss]
+        
+        loss = 0.01 * 0.5 * sum(nb_loss_list) + 0.1 * 0.5 * sum(opa_loss_list) #+ 0.5 * sum(rgb_loss_list) 
+        # loss = 0.1 * 0.5 * sum(opa_loss_list) + 0.5 * sum(rgb_loss_list) 
+        # loss = 0.1 * 0.5 * sum(nb_loss_list)
+        return loss
+
+
+    def get_training_loss(self, batch, rendered_results):
         c2w = batch['c2w'].to(torch.float32)
         ray_num = c2w.shape[0]
-        rendered_results = self.model.forward_c2w(
-            input_dict, self.randomized, self.white_bkgd, self.near, self.far
-        )
-        loss_dict = {}
-        rgb_target = batch["rgb"]
-        if self.hparams.composite_rendering:
-            rgb_coarse = rendered_results['level_0']['rgb']
-            rgb_fine = rendered_results['level_1']['rgb']
-
-            rgb_coarse = rgb_coarse.view([ray_num, 3])
-            rgb_fine = rgb_fine.view([ray_num, 3])
-
-            loss0 = helper.img2mse(rgb_coarse, rgb_target)
-            loss1 = helper.img2mse(rgb_fine, rgb_target)
-
-            opa_part_0 = rendered_results['level_0']['opa_part']
-            opa_part_1 = rendered_results['level_1']['opa_part']
-
-
-            seg_0 = rendered_results['level_0']['sample_seg']
-            seg_1 = rendered_results['level_1']['sample_seg']
-            den_0 = rendered_results['level_0']['density']
-            den_1 = rendered_results['level_1']['density']
-
-            def class_cov(seg, den):
-                clamp_den = torch.clamp(den, 0, 1)
-                seg_den = seg * clamp_den
-                class_num = seg.shape[-1]
-                seg_den_sum = seg_den.view(-1, class_num).sum(dim=0).reshape(-1)
-                return torch.norm(seg_den_sum, p=2)
-
-            cov_0 = class_cov(seg_0, den_0)
-            cov_1 = class_cov(seg_1, den_1)
-            total_cov = cov_1 + cov_0
-
-            opa_target = batch['mask']
-            bceloss = torch.nn.BCELoss()
-            opa_max_0, _ = opa_part_0.max(dim=1)
-            opa_max_1, _ = opa_part_1.max(dim=1)
-            
-            opa_loss_0 = F.mse_loss(opa_max_0, opa_target.view(-1))
-            opa_loss_1 = F.mse_loss(opa_max_1, opa_target.view(-1))
-
-            comp_seg_0 = rendered_results['level_0']['comp_seg']
-            comp_seg_1 = rendered_results['level_1']['comp_seg']
-
-            comp_seg_sum_0 = comp_seg_0.sum(dim=0)
-            comp_seg_sum_1 = comp_seg_1.sum(dim=0)
-
-            seg_cov0 = torch.cov(comp_seg_sum_0)
-            seg_cov1 = torch.cov(comp_seg_sum_1)
-
-            def mean_pairwise_absolute_difference(numbers):
-                n = len(numbers)
-                
-                # Ensure there are at least two numbers for pairwise comparison
-                if n < 2:
-                    raise ValueError("The list must contain at least two numbers for pairwise comparison.")
-
-                # Calculate the pair-wise absolute differences
-                differences = [torch.abs(numbers[i] - numbers[j]) for i in range(n) for j in range(i+1, n)]
-
-                # Calculate the mean of the absolute differences
-                mean_difference = sum(differences) / len(differences)
-
-                return mean_difference
-
-            seg_mean_diff_0 = mean_pairwise_absolute_difference(comp_seg_sum_0)
-            seg_mean_diff_1 = mean_pairwise_absolute_difference(comp_seg_sum_1)
-
-
-            def get_one_hot_loss(opa):
-                '''
-                opa: shape [r, p]
-                '''
-                eps = 1e-7
-                max_opa, _ = opa.max(dim=1)
-                opa_sum = opa.sum(dim=1) + eps
-                opa_prob = max_opa / opa_sum
-                loss = torch.abs(opa_prob - opa.sum(dim=1) / opa_sum)
-                return loss.mean()
-
-            # one_hot_loss_0 = get_one_hot_loss(opa_part_0)
-            # one_hot_loss_1 = get_one_hot_loss(opa_part_1)
-
-
-            # self.log("train/one_hot_loss_0", one_hot_loss_0, on_step=True, logger=True)
-            # self.log("train/one_hot_loss_1", one_hot_loss_1, on_step=True, logger=True)
-
-            # loss = loss0 + loss1 + 0.1*(opa_loss_0 + opa_loss_1) + 0.001*(one_hot_loss_0 + one_hot_loss_1)
-            # if self.hparams.fine_level_loss_only:
-            #     loss = loss1
-                
-            #     if self.hparams.use_opa_loss:
-            #         loss += opa_loss_1
-            #         self.log("train/opa_loss_1", opa_loss_1, on_step=True, logger=True)
-            # else:
-            if self.hparams.fine_level_loss_only:
-                print('fine_level_only is deprecated!')
-
-            loss = loss1 + loss0
-
-            loss_dict['rgb_loss'] = loss0 + loss1
-            if self.hparams.use_opa_loss:
-                loss = loss + (opa_loss_0 + opa_loss_1)
-                self.log("train/opa_loss_0", opa_loss_0, on_step=True, logger=True)
-                self.log("train/opa_loss_1", opa_loss_1, on_step=True, logger=True)
-                loss_dict['opa_loss'] = (opa_loss_0 + opa_loss_1)
-
-            if self.hparams.use_cov_loss:
-                loss += self.hparams.cov_coef * total_cov
-                self.log("train/cov_loss", total_cov, on_step=True, logger=True)
-                loss_dict['cov_loss'] = self.hparams.cov_coef * total_cov
-
-            if self.hparams.use_seg_cov_loss:
-                seg_cov = self.hparams.seg_cov_coef * (seg_cov0 + seg_cov1)
-                loss += seg_cov 
-                self.log("train/seg_cov_loss", seg_cov, on_step=True, logger=True)
-                loss_dict['seg_cov_loss'] = self.hparams.seg_cov_coef * (seg_cov0 + seg_cov1)
-                
-            if self.hparams.use_seg_diff_loss:
-                seg_diff = self.hparams.seg_diff_coef * (seg_mean_diff_0 + seg_mean_diff_1)
-                loss += seg_diff
-                self.log("train/seg_diff_loss", seg_diff, on_step=True, logger=True)
-                loss_dict['seg_diff_loss'] = seg_diff
-
-        else:
-            rgb_coarse = rendered_results['level_0']['rgb_seg']
-            rgb_fine = rendered_results['level_1']['rgb_seg']
-
-            rgb_coarse = rgb_coarse.view([-1, ray_num, 3]).sum(dim=0)
-            rgb_fine = rgb_fine.view([-1, ray_num, 3]).sum(dim=0)
-            
-            if self.hparams.record_hard_sample:
-                if not self.train_dataset.use_sample_list:
-                    loss0_dict = self._calculate_loss_and_record_sample(rgb_coarse, rgb_target, batch['idx'])
-                    loss1_dict = self._calculate_loss_and_record_sample(rgb_fine, rgb_target, batch['idx'])
-                    loss0 = loss0_dict['loss']
-                    loss1 = loss1_dict['loss']
-                    sample_0 = loss0_dict['hard_samples']
-                    sample_1 = loss1_dict['hard_samples']
-                    samples = torch.cat((sample_0, sample_1)).unique()
-                    self.train_dataset.sample_list += [samples]
-
-                    loss = loss0 + loss1
-            else:
-                loss0 = helper.img2mse(rgb_coarse, rgb_target)
-                loss1 = helper.img2mse(rgb_fine, rgb_target)
-
-                loss = loss0 + loss1
-
-        psnr0 = helper.mse2psnr(loss0)
-        psnr1 = helper.mse2psnr(loss1)
-    
-        self.log("train/psnr1", psnr1, on_step=True, prog_bar=True, logger=True)
-        self.log("train/psnr0", psnr0, on_step=True, prog_bar=True, logger=True)
-        # opacity loss
-        if self.hparams.use_opa_loss:
-            opa_target = batch['mask']
-
-            opa_coarse = rendered_results['level_0']['opacity'].view([-1, ray_num]).permute(1, 0)
-            opa_fine = rendered_results['level_1']['opacity'].view([-1, ray_num]).permute(1, 0)
-            # # [ray_num, part_num]
-            max_opa_c, _ = torch.max(opa_coarse, dim=0)
-            max_opa_f, _ = torch.max(opa_fine, dim=0)
-            
-            opa_loss_c = (max_opa_c - opa_target)**2
-            opa_loss_f = (max_opa_f - opa_target)**2
-            opa_loss = 0.5 * (opa_loss_c.mean() + opa_loss_f.mean())
-            self.log("train/opa_loss", opa_loss, on_step=True, prog_bar=True, logger=True)
-            
-            loss += 0.1*opa_loss
-
-        if self.hparams.use_dist_reg:
-            density_c = rendered_results['level_0']['density']
-            density_f = rendered_results['level_1']['density']
-
-            raw_seg_c = rendered_results['level_0']['sample_seg']
-            raw_seg_f = rendered_results['level_1']['sample_seg']
-
-            dist_c = get_adjacency_dist(raw_seg_c)
-            dist_f = get_adjacency_dist(raw_seg_f)
-
-            mean_dist = 0.5*(density_c*dist_c).abs().mean() + 0.5*(density_f * dist_f).abs().mean()
-            self.log("train/dist_reg", mean_dist, on_step=True)
-            loss += 0.01*mean_dist
-
-
-        if self.hparams.use_bg_reg:
-            # use regularization
-
-            seg_bg_c = rendered_results['level_0']['sample_seg'][:, :, 0]
-            seg_bg_f = rendered_results['level_1']['sample_seg'][:, :, 0]
-
-            density_c = rendered_results['level_0']['density'].reshape(seg_bg_c.shape)
-            density_f = rendered_results['level_1']['density'].reshape(seg_bg_f.shape)
-
-            sum_seg_c = (seg_bg_c * density_c).sum()
-            sum_seg_f = (seg_bg_f * density_f).sum()
-
-            bg_regularization = 1e-8 * (sum_seg_c + sum_seg_f)
-
-            loss += bg_regularization
-            self.log("train/bg_regularize", bg_regularization, on_step=True)
-        
-        self.log("train/loss", loss, on_step=True)
-        loss_dict['loss'] = loss
-        return loss_dict
-
-    def training_step(self, batch, batch_idx):
-
-        for k, v in batch.items():
-            if k == "obj_idx":
-                continue
-            batch[k] = v.squeeze(0)
-        if self.global_step != 0:
-            if self.global_step % self.hparams.hypothesis_steps == 0:
-                if self.global_step >= self.hparams.hypothesis_start_step:
-                    self.hypothesis_testing(batch)
-                # return
-
-        # transform c2w
-        c2w = batch['c2w'].to(torch.float32)
-        ray_num = c2w.shape[0]
-        # dirs = batch['dirs'].repeat(self.part_num, 1)
-        new_c2w_list = []
-        part_code_list = []
-        for i in range(self.part_num):
-            one_hot = self.get_part_code(ray_num, i)
-            one_hot = one_hot.to(c2w)
-            part_code_list += [one_hot]
-            if i == 0:
-                new_c2w_list += [c2w]
-            else:
-                new_c2w = self.art_list[i-1](c2w)
-                new_c2w_list += [new_c2w]
-
-                # log art est to check optimization
-                # art_est = self.art_list[i-1]
-                # gt_Q = art_est.perfect_Q
-                # gt_axis = art_est.perfect_axis_origin
-                # self.log('train/art_gt_Q_' + str(i), gt_Q, on_step=True)
-                # self.log('train/art_gt_T_' + str(i), gt_axis, on_step=True)
-                # self.log('train/art_est_Q_' + str(i), art_est.Q, on_step=True)
-                # self.log('train/art_est_T_' + str(i), art_est.axis_origin, on_step=True)
-
-        part_code = torch.cat(part_code_list, dim=0)
-
-        input_dict = {
-            'part_code': part_code,
-            'c2w': torch.cat(new_c2w_list, dim=0),
-            'dirs': batch['dirs'].repeat(self.part_num, 1)
-        }
-        
-        rendered_results = self.model.forward_c2w(
-            input_dict, self.randomized, self.white_bkgd, self.near, self.far
-        )
-        '''
-        result = {
-                "rgb": render_dict['comp_rgb'],
-                "acc": render_dict['acc'],
-                "weights": render_dict['weights'],
-                "depth": render_dict['depth'],
-                "comp_seg": render_dict['comp_seg'],
-                "density": density,
-                "opacity": render_dict['opacity']
-            }
-            ret['level_' + str(i_level)] = result
-        '''
         rgb_target = batch["rgb"]
         if self.hparams.composite_rendering:
             rgb_coarse = rendered_results['level_0']['rgb']
@@ -2196,12 +2105,12 @@ class LitNeRFSegArt(LitModel):
 
             seg_occ_0, _ = comp_seg_0.max(dim=1)
             seg_occ_1, _ = comp_seg_1.max(dim=1)
-            seg_occ_0 = torch.clamp(seg_occ_0, min=1e-6, max=1-1e-6)
-            seg_occ_1 = torch.clamp(seg_occ_1, min=1e-6, max=1-1e-6)
+            seg_occ_0_clamped = torch.clamp(seg_occ_0, min=1e-6, max=1-1e-6)
+            seg_occ_1_clamped = torch.clamp(seg_occ_1, min=1e-6, max=1-1e-6)
 
             # mask occupancy loss
-            seg_occ_loss_0 = bceloss(seg_occ_0, opa_target.view(-1))
-            seg_occ_loss_1 = bceloss(seg_occ_1, opa_target.view(-1))
+            seg_occ_loss_0 = bceloss(seg_occ_0_clamped, opa_target.view(-1))
+            seg_occ_loss_1 = bceloss(seg_occ_1_clamped, opa_target.view(-1))
             seg_occ_loss = seg_occ_loss_0 + seg_occ_loss_1
 
             def mean_pairwise_absolute_difference(numbers):
@@ -2231,8 +2140,11 @@ class LitNeRFSegArt(LitModel):
                 seg_mean_diff_1 = mean_pairwise_absolute_difference(comp_seg_sum_1)
 
             if self.hparams.fine_level_loss_only:
-                print('fine_level_only is deprecated!')
+                raise RuntimeError('fine_level_only is deprecated!')
+                
             loss = loss1 + loss0
+            rgb_loss = loss
+            self.log("train/rgb_loss", rgb_loss, on_step=True, logger=True)
             if self.hparams.use_opa_loss:
                 loss = loss + (opa_loss_0 + opa_loss_1)
                 self.log("train/opa_loss_0", opa_loss_0, on_step=True, logger=True)
@@ -2255,8 +2167,9 @@ class LitNeRFSegArt(LitModel):
 
             if self.hparams.use_seg_mask_loss:
                 seg_occ_loss *= self.hparams.seg_mask_loss_coef
-                loss += seg_occ_loss
-                self.log("train/seg_mask_loss", seg_occ_loss, on_step=True, logger=True)
+                if self.opt_seg:
+                    loss += seg_occ_loss
+                    self.log("train/seg_mask_loss", seg_occ_loss, on_step=True, logger=True)
 
         else:
             rgb_coarse = rendered_results['level_0']['rgb_seg']
@@ -2316,8 +2229,9 @@ class LitNeRFSegArt(LitModel):
             dist_f = get_adjacency_dist(raw_seg_f)
 
             mean_dist = 0.5*(density_c*dist_c).abs().mean() + 0.5*(density_f * dist_f).abs().mean()
+            mean_dist *= 0.01
             self.log("train/dist_reg", mean_dist, on_step=True)
-            loss += 0.01*mean_dist
+            loss += mean_dist
 
         if self.hparams.use_bg_reg:
 
@@ -2337,6 +2251,109 @@ class LitNeRFSegArt(LitModel):
         
         self.log("train/loss", loss, on_step=True)
 
+        
+            
+        for i in range(len(self.art_list)):
+            key_Q = 'train/Q_err_%d'%i
+            key_T = 'train/T_err_%d'%i
+            q_table = self.table_q_list[i]
+            t_table = self.table_t_list[i]
+            q_new_err = F.normalize(self.art_list[i].Q, p=2, dim=0) - self.art_list[i].perfect_Q
+            t_new_err = self.art_list[i].axis_origin - self.art_list[i].perfect_axis_origin
+            q_err = q_new_err.abs().sum().detach().cpu() 
+            t_err = t_new_err.abs().sum().detach().cpu()
+            q_new_err = q_new_err.detach().cpu().numpy().tolist()
+            t_new_err = t_new_err.detach().cpu().numpy().tolist()
+            
+            # self.log(log_dict)
+            
+            self.log('train/Q_err_sum_%d'%i, q_err, logger=True)
+            self.log('train/T_err_sum_%d'%i, t_err, logger=True)
+        
+        if (self.global_step % 20) == 0:
+            q_table.add_data(*q_new_err)
+            t_table.add_data(*t_new_err)
+            self.logger.log_table(key=key_Q, columns=q_table.columns, data=q_table.data)
+            self.logger.log_table(key=key_T, columns=t_table.columns, data=t_table.data)
+        return loss
+    
+    def training_step(self, batch, batch_idx):
+
+        for k, v in batch.items():
+            if k == "obj_idx":
+                continue
+            batch[k] = v.squeeze(0)
+        # if self.global_step != 0:
+        #     if self.global_step % self.hparams.hypothesis_steps == 0:
+        #         if self.global_step >= self.hparams.hypothesis_start_step:
+        #             self.hypothesis_testing(batch)
+                # return
+
+        # transform c2w
+        c2w = batch['c2w'].to(torch.float32)
+        ray_num = c2w.shape[0]
+        # dirs = batch['dirs'].repeat(self.part_num, 1)
+        
+        '''
+        result = {
+                "rgb": render_dict['comp_rgb'],
+                "acc": render_dict['acc'],
+                "weights": render_dict['weights'],
+                "depth": render_dict['depth'],
+                "comp_seg": render_dict['comp_seg'],
+                "density": density,
+                "opacity": render_dict['opacity']
+            }
+            ret['level_' + str(i_level)] = result
+        '''
+        if self.global_step < self.hparams.warm_up_steps:
+            # only use identical transform
+            # render using part_rendering
+            # compare the loss where pixels are identified as occupied by the original nerf
+            input_dict = {
+                'c2w': batch['c2w'],
+                'dirs': batch['dirs']
+            }
+            rendered_results = self.model.forward_c2w(
+                input_dict, self.randomized, self.white_bkgd, self.near, self.far, warm_up=True
+            )
+            loss = self.get_warmup_loss(batch, rendered_results)
+            self.log('train/warm_up_loss', loss, on_step=True)
+        else:
+            new_c2w_list = []
+            part_code_list = []
+            for i in range(self.part_num):
+                one_hot = self.get_part_code(ray_num, i)
+                one_hot = one_hot.to(c2w)
+                part_code_list += [one_hot]
+                if i == 0:
+                    new_c2w_list += [c2w]
+                else:
+                    new_c2w = self.art_list[i-1](c2w)
+                    new_c2w_list += [new_c2w]
+
+                    # log art est to check optimization
+                    # art_est = self.art_list[i-1]
+                    # gt_Q = art_est.perfect_Q
+                    # gt_axis = art_est.perfect_axis_origin
+                    # self.log('train/art_gt_Q_' + str(i), gt_Q, on_step=True)
+                    # self.log('train/art_gt_T_' + str(i), gt_axis, on_step=True)
+                    # self.log('train/art_est_Q_' + str(i), art_est.Q, on_step=True)
+                    # self.log('train/art_est_T_' + str(i), art_est.axis_origin, on_step=True)
+
+            part_code = torch.cat(part_code_list, dim=0)
+
+            input_dict = {
+                'part_code': part_code,
+                'c2w': torch.cat(new_c2w_list, dim=0),
+                'dirs': batch['dirs'].repeat(self.part_num, 1)
+            }
+            
+            rendered_results = self.model.forward_c2w(
+                input_dict, self.randomized, self.white_bkgd, self.near, self.far
+            )
+            loss = self.get_training_loss(batch, rendered_results)
+
         opts = self.optimizers()
         
         for pg in opts.param_groups:
@@ -2349,9 +2366,15 @@ class LitNeRFSegArt(LitModel):
 
         self.log('train/seg_lr', seg_lr, on_step=True, prog_bar=False, logger=True)
         if not self.hparams.freeze_Q:
-            self.log('train/art_lr_Q', art_lr_Q, on_step=True, prog_bar=True, logger=True)
+            try:
+                self.log('train/art_lr_Q', art_lr_Q, on_step=True, prog_bar=True, logger=True)
+            except:
+                pass
         if not self.hparams.freeze_T:
-            self.log('train/art_lr_T', art_lr_T, on_step=True, prog_bar=True, logger=True)
+            try:
+                self.log('train/art_lr_T', art_lr_T, on_step=True, prog_bar=True, logger=True)
+            except:
+                pass
         return loss
 
     def training_epoch_end(self, outputs: EPOCH_OUTPUT) -> None:
@@ -2651,10 +2674,15 @@ class LitNeRFSegArt(LitModel):
                 colored_array[:, :, -1] = 1
                 image = Image.fromarray((colored_array * 255).astype(np.uint8))
                 return image
+
             gt_list = [toPIL(output['img'], H, W) for output in outputs]
             img_list = [toPIL(output['rgb'], H, W) for output in outputs]
             gt_seg_list = [segToImg(output['seg_gt'], H, W) for output in outputs]
             pred_seg_list = [segToImg(output['seg_pred'], H, W) for output in outputs]
+            if not self.sanity_check:
+                torch.save(outputs[0]['seg_gt'], 'draft/seg_gt_%d.pt'%self.global_step)
+                torch.save(outputs[0]['seg_pred'], 'draft/seg_pred_%d.pt'%self.global_step)
+            # raise RuntimeError
             if self.sanity_check:
                 log_key = "val/sanity_check"
             else:

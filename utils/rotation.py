@@ -32,6 +32,9 @@ def axis_angle_to_quaternions(axis: torch.tensor, angle: torch.tensor):
     return q
 
 def R_from_quaternions(quaternions: torch.tensor):
+    '''
+    w, x, y, z
+    '''
     quaternions = F.normalize(quaternions, p=2., dim=0)
 
     r, i, j, k = torch.unbind(quaternions, -1)

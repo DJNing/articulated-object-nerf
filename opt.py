@@ -255,10 +255,15 @@ def get_parser():
     parser.add_argument('--use_seg_mask_loss', type=bool, default=True, help="use segmentation GT for seg_diff loss")
     parser.add_argument('--seg_mask_loss_coef', type=float, default=1, help="use segmentation GT for seg_diff loss")
     parser.add_argument('--lr_art', type=float, default=1e-3, help="learning rate for pose estimation")
+    parser.add_argument('--lr_art_T', type=float, default=1e-3, help="learning rate for pose estimation")
+    parser.add_argument('--lr_art_Q', type=float, default=1e-3, help="learning rate for pose estimation")
     parser.add_argument('--lr_art_separate', type=bool, default=False, help="learning rate for others")
     parser.add_argument('--lr_init', type=float, default=1e-3, help="learning rate for others")
-    parser.add_argument('--freeze_Q', type=bool, default=False, help="learning rate for others")
-    parser.add_argument('--freeze_T', type=bool, default=False, help="learning rate for others")
+    parser.add_argument('--freeze_Q', type=bool, default=False, help="freeze Q during trainig, init with perfect Q")
+    parser.add_argument('--freeze_T', type=bool, default=False, help="freeze T during traini perfect T")
+    parser.add_argument('--obj_type', type=str, default='laptop', help="laptop or stapler")
+    parser.add_argument('--warm_up_steps', type=int, default=500, help="laptop or stapler")
+    parser.add_argument('--switching_steps', type=int, default=500, help="laptop or stapler")
     
     return parser
 

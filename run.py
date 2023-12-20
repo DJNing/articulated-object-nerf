@@ -157,10 +157,10 @@ def main(hparams):
         )
     else:
         # SET UNUSED PARAMETERS TO FALSEEE
-        if hparams.exp_type == "nerf_seg":
-            find_unused_parameters = True
-        else:
-            find_unused_parameters = False
+        # if hparams.exp_type == "nerf_seg":
+        find_unused_parameters = True
+        # else:
+        #     find_unused_parameters = False
         trainer = Trainer(
             max_epochs=hparams.num_epochs,
             callbacks=callbacks,

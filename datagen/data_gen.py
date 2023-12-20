@@ -15,13 +15,15 @@ def parse_args():
     parser.add_argument("--art_nums", type=int, default=10, help="number of different articulation settings")
     
     parser.add_argument("--render_pose_path", type=str, default=None, help="load saved render pose for image generation, defalut is None")
-    args = parser.parse_args()
     parser.add_argument("--qpos", type=float, nargs='+', default=None, help="set object articulation status, list of floats")
     parser.add_argument("--with_seg", type=bool, default=False, help="whether to save seg image with NeRF training data")
     parser.add_argument("--art_seg_data", type=bool, default=False, help="whether to set all qpos to their upper limit")
     parser.add_argument("--radius", type=int, default=4, help="camera distance to the origin")
     parser.add_argument("--q_pos", type=float, nargs="+", default=None, help="specify q_pos to the object")
     parser.add_argument("--train_num", type=int, nargs=100, default=None, help="specify q_pos to the object")
+    
+    args = parser.parse_args()
+    
     # Load and parse the JSON configuration file
     with open(args.config, "r") as config_file:
         config_data = json.load(config_file)

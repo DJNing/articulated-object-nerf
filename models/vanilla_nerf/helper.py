@@ -260,6 +260,79 @@ def filter_seg_from_acc(seg, acc):
     result = seg[non_zero_indices]
     
     return result
+def volumetric_part_rendering(rgb, density, t_vals, dirs, white_bkgd, seg, part_idx=0):
+    '''
+    [rays, n_samples, channle]
+    '''
+    eps = 1e-10
+
+    dists = torch.cat(
+        [
+            t_vals[..., 1:] - t_vals[..., :-1],
+            torch.ones(t_vals[..., :1].shape, device=t_vals.device) * 1e10,
+        ],
+        dim=-1,
+    )
+    dists = dists * torch.norm(dirs[..., None, :], dim=-1)
+    def get_weights(density, dists, eps=1e-10):
+        alpha = 1.0 - torch.exp(-density[..., 0] * dists)
+        accum_prod = torch.cat(
+            [
+                torch.ones_like(alpha[..., :1]),
+                torch.cumprod(1.0 - alpha[..., :-1] + eps, dim=-1),
+            ],
+            dim=-1,
+        )
+
+        weights = alpha * accum_prod
+        return weights
+    # get seg_density
+    seg_fg = seg[:, :, part_idx:part_idx+1]
+    
+    seg_density = seg_fg * density
+    weights = get_weights(density, dists, eps=eps)
+    seg_weights = get_weights(seg_density, dists, eps=eps)
+    # seg_weights = get_weights(seg, dists, eps=eps)
+
+    comp_rgb = (seg_weights.unsqueeze(-1) * rgb).sum(dim=-2)
+
+    # comp_rgb_seg = (weights.unsqueeze(-1) * seg_weights.unsqueeze(-1) * rgb).sum(dim=-2)
+
+    if torch.isnan(comp_rgb).any():
+        print('nan in rgb')
+
+    depth = (seg_weights * t_vals).sum(dim=-1)
+
+    depth = torch.nan_to_num(depth, float("inf"))
+    depth = torch.clamp(depth, torch.min(depth), torch.max(depth))
+
+    acc = weights.sum(dim=-1)
+    seg_opacity = seg_weights.sum(dim=-1)
+    # opacity = (weights * seg_weights).sum(dim=-1)
+    inv_eps = 1 / eps
+
+    if white_bkgd:
+        comp_rgb = comp_rgb + (1.0 - acc.unsqueeze(-1))
+
+    
+    comp_nocs = None
+
+    # also render non-base(nb) part for negative label
+    nb_seg, _ = seg[:, :, 1:].max(dim=-1, keepdim=True)
+    nb_density = nb_seg * density
+    nb_weights = get_weights(nb_density, dists, eps=eps)
+    nb_opacity = nb_weights.sum(dim=-1)
+    ret_dict = {
+        'comp_rgb': comp_rgb,
+        'acc': acc,
+        'seg_weights': seg_weights,
+        'seg_opa': seg_opacity,
+        'weights': weights,
+        'depth': depth,
+        'comp_nocs': comp_nocs,
+        'nb_opa': nb_opacity
+    }
+    return ret_dict
 
 def volumetric_seg_rendering(rgb, density, t_vals, dirs, white_bkgd, seg, nocs=None):
     eps = 1e-10
@@ -365,6 +438,15 @@ def volumetric_composite_rendering(rgb, density, t_vals, dirs, \
     # dists = dists.unsqueeze(-1) # [r, s, 1]
     dists = dists.unsqueeze(1) # [r*p, 1, s]
     dists = dists.view(rgb.shape[0], rgb.shape[1], rgb.shape[2])
+
+    # # canonical rendering
+    # ca_rgb = rgb[0, :, :, :]
+    # ca_dists = dists[0, :, :]
+    # ca_density = density[0, :, :, :]
+
+
+
+
     part_num, ray_num, sample_num, _ = rgb.shape
     rgb = rgb.permute(1, 0, 2, 3) # [r, p, s, c]
     density = density.permute(1, 0, 2, 3) # [r, p, s, 1]
@@ -418,7 +500,9 @@ def volumetric_composite_rendering(rgb, density, t_vals, dirs, \
         "depth": depth,
         "weights": weights,
         "opa_part": opa_acc,
-        "comp_seg": seg_final
+        "comp_seg": seg_final,
+        "canonical_rgb": None,
+        "canonical_opa": None
     }
     return ret_dict
 

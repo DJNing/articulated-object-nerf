@@ -633,3 +633,75 @@ def get_module(net):
         return net.module
     else:
         return net
+    
+def quaternion_to_axis_angle(quaternions: torch.Tensor) -> torch.Tensor:
+    """
+    Convert rotations given as quaternions to axis/angle.
+
+    Args:
+        quaternions: quaternions with real part first,
+            as tensor of shape (..., 4).
+
+    Returns:
+        Rotations given as a vector in axis angle form, as a tensor
+            of shape (..., 3), where the magnitude is the angle
+            turned anticlockwise in radians around the vector's
+            direction.
+    """
+    norms = torch.norm(quaternions[..., 1:], p=2, dim=-1, keepdim=True)
+    half_angles = torch.atan2(norms, quaternions[..., :1])
+    angles = 2 * half_angles
+    eps = 1e-6
+    small_angles = angles.abs() < eps
+    sin_half_angles_over_angles = torch.empty_like(angles)
+    sin_half_angles_over_angles[~small_angles] = (
+        torch.sin(half_angles[~small_angles]) / angles[~small_angles]
+    )
+    # for x small, sin(x/2) is about x/2 - (x/2)^3/6
+    # so sin(x/2)/x is about 1/2 - (x*x)/48
+    sin_half_angles_over_angles[small_angles] = (
+        0.5 - (angles[small_angles] * angles[small_angles]) / 48
+    )
+    axis = quaternions[..., 1:] / sin_half_angles_over_angles
+    axis = F.normalize(axis, p=2., dim=0)
+    return axis, angles
+
+def R_from_axis_angle(k: torch.tensor, theta: torch.tensor):
+    if torch.norm(k) == 0.:
+        return torch.eye(3)
+    k = F.normalize(k, p=2., dim=0)
+    kx, ky, kz = k[0], k[1], k[2]
+    cos, sin = torch.cos(theta), torch.sin(theta)
+    R = torch.zeros((3, 3)).to(k)
+    R[0, 0] = cos + (kx**2) * (1 - cos)
+    R[0, 1] = kx * ky * (1 - cos) - kz * sin
+    R[0, 2] = kx * kz * (1 - cos) + ky * sin
+    R[1, 0] = kx * ky * (1 - cos) + kz * sin
+    R[1, 1] = cos + (ky**2) * (1 - cos)
+    R[1, 2] = ky * kz * (1 - cos) - kx * sin
+    R[2, 0] = kx * kz * (1 - cos) - ky * sin
+    R[2, 1] = ky * kz * (1 - cos) + kx * sin
+    R[2, 2] = cos + (kz**2) * (1 - cos)
+    return R
+
+def calculate_motion_error(axis_origin, Q):
+    axis_o = axis_origin.detach()
+    quaternions = Q.detach()
+    axis_d, half_angle = quaternion_to_axis_angle(quaternions) 
+    angle = 2. * half_angle 
+    # convert to rotation matrix (from t=0 to t=1)
+    if torch.isnan(axis_d).sum().item() > 0: # the rotation is an Identity Matrix
+        axis_d = torch.ones(3) # random direction
+        angle = torch.zeros(1)
+    else:
+        R = R_from_axis_angle(axis_d, angle)
+    # convert to degree
+    rot_angle = torch.rad2deg(angle)
+    motion = {
+        'type': 'rotate',
+        'axis_o': axis_o,
+        'axis_d': axis_d,
+        'rot_angle': rot_angle,
+        'R': R,
+    }
+    return motion

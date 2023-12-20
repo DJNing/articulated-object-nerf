@@ -431,7 +431,7 @@ class SapienArtSegDataset(SapienDataset):
         self.image_list = []
         self.seg_list = []
         self.get_img_list()
-
+        self.poses = []
         self.dirs = []
         self.c2w = []
         self.rgb = []
@@ -485,6 +485,7 @@ class SapienArtSegDataset(SapienDataset):
             self.seg += [self.load_seg(seg_name)]
             valid_mask = (img[:, -1]).view([-1, 1])
             img = img[:, :3]*img[:, -1:] # use black background
+            self.poses += [torch.Tensor(np.array(v)).unsqueeze(0)]
             self.c2w += [torch.Tensor(np.array(v)).unsqueeze(0)] * img.shape[0]
             self.rgb += [img]
             self.mask += [valid_mask]

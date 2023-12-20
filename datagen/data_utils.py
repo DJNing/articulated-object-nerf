@@ -212,7 +212,9 @@ def gen_articulated_object_nerf_s1(num_pos_img, radius_, split, camera, asset, s
     render_pose_dict = {}
     # j_types = get_joint_type(asset)
     transform_json = {
-        "focal": camera.fy
+        "focal": camera.fy,
+        "fy": camera.fy,
+        "fx": camera.fx
     }
     frame_dict = dict()
     max_d = 0

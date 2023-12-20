@@ -182,7 +182,7 @@ render_image(camera, scene, './draft/test_view.png')
 seg_labels = camera.get_uint32_texture('Segmentation')  # [H, W, 4]
 seg_view = seg_labels[..., 1].astype(np.uint8)  # actor-level
 view_0 = camera.get_model_matrix()
-art_degree = 25
+art_degree = -27
 
 # Rotate the joint and render a new image
 asset.set_qpos(degrees_to_radians(art_degree))
