@@ -16,6 +16,7 @@ import numpy as np
 from models.vanilla_nerf.model import LitNeRF
 from models.vanilla_nerf.model_ae_art import LitNeRF_AE_ART
 from models.vanilla_nerf.model_autodecoder import LitNeRF_AutoDecoder
+from models.vanilla_nerf.model_nerfacc import LitNeRFAcc
 # from models.vanilla_nerf.model_part_seg import LitNeRFSeg
 from models.vanilla_nerf.model_nerfseg import LitNeRFSeg_v2, LitNeRFSegArt
 
@@ -43,6 +44,11 @@ def main(hparams):
             hparams=hparams,
             lr_init=hparams.lr_init,
             lr_art=hparams.lr_art
+        )
+    elif hparams.exp_type == "nerfacc":
+        system = LitNeRFAcc(
+            hparams=hparams,
+            lr_init=hparams.lr_init
         )
     result_path = P(hparams.output_path) / hparams.exp_name
     result_path.mkdir(parents=True, exist_ok=True)

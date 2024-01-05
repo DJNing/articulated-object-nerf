@@ -260,6 +260,7 @@ def filter_seg_from_acc(seg, acc):
     result = seg[non_zero_indices]
     
     return result
+
 def volumetric_part_rendering(rgb, density, t_vals, dirs, white_bkgd, seg, part_idx=0):
     '''
     [rays, n_samples, channle]
@@ -274,18 +275,7 @@ def volumetric_part_rendering(rgb, density, t_vals, dirs, white_bkgd, seg, part_
         dim=-1,
     )
     dists = dists * torch.norm(dirs[..., None, :], dim=-1)
-    def get_weights(density, dists, eps=1e-10):
-        alpha = 1.0 - torch.exp(-density[..., 0] * dists)
-        accum_prod = torch.cat(
-            [
-                torch.ones_like(alpha[..., :1]),
-                torch.cumprod(1.0 - alpha[..., :-1] + eps, dim=-1),
-            ],
-            dim=-1,
-        )
-
-        weights = alpha * accum_prod
-        return weights
+    
     # get seg_density
     seg_fg = seg[:, :, part_idx:part_idx+1]
     
@@ -345,18 +335,18 @@ def volumetric_seg_rendering(rgb, density, t_vals, dirs, white_bkgd, seg, nocs=N
         dim=-1,
     )
     dists = dists * torch.norm(dirs[..., None, :], dim=-1)
-    def get_weights(density, dists, eps=1e-10):
-        alpha = 1.0 - torch.exp(-density[..., 0] * dists)
-        accum_prod = torch.cat(
-            [
-                torch.ones_like(alpha[..., :1]),
-                torch.cumprod(1.0 - alpha[..., :-1] + eps, dim=-1),
-            ],
-            dim=-1,
-        )
+    # def get_weights(density, dists, eps=1e-10):
+    #     alpha = 1.0 - torch.exp(-density[..., 0] * dists)
+    #     accum_prod = torch.cat(
+    #         [
+    #             torch.ones_like(alpha[..., :1]),
+    #             torch.cumprod(1.0 - alpha[..., :-1] + eps, dim=-1),
+    #         ],
+    #         dim=-1,
+    #     )
 
-        weights = alpha * accum_prod
-        return weights
+    #     weights = alpha * accum_prod
+        # return weights
     
     weights = get_weights(density, dists, eps=eps)
     seg_weights = get_weights(seg, dists, eps=eps)
@@ -440,12 +430,19 @@ def volumetric_composite_rendering(rgb, density, t_vals, dirs, \
     dists = dists.view(rgb.shape[0], rgb.shape[1], rgb.shape[2])
 
     # # canonical rendering
-    # ca_rgb = rgb[0, :, :, :]
-    # ca_dists = dists[0, :, :]
-    # ca_density = density[0, :, :, :]
+    ca_dists = dists[0, :, :]
+    ca_density = density[0, :, :, :]
 
+    dy_density = density[1, :, :, :]
+    dy_dists = dists[1, :, :]
+    ca_weights = get_weights(ca_density, ca_dists)
+    dy_rgb = rgb[1, :, :, :]
+    dy_seg = seg[1, :, :, 1:2]
+    
+    dy_weights = get_weights(dy_density * dy_seg, dy_dists)
 
-
+    dy_comp_rgb = (dy_weights.unsqueeze(-1) * dy_rgb).sum(dim=-2)
+    ca_opa = ca_weights.sum(dim=-1)
 
     part_num, ray_num, sample_num, _ = rgb.shape
     rgb = rgb.permute(1, 0, 2, 3) # [r, p, s, c]
@@ -502,7 +499,9 @@ def volumetric_composite_rendering(rgb, density, t_vals, dirs, \
         "opa_part": opa_acc,
         "comp_seg": seg_final,
         "canonical_rgb": None,
-        "canonical_opa": None
+        "canonical_opa": None,
+        "dy_comp_rgb": dy_comp_rgb,
+        "ca_opa": ca_opa
     }
     return ret_dict
 

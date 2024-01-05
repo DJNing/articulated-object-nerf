@@ -188,8 +188,8 @@ class ArticulationEstimation(nn.Module):
         '''
         input: c2w
         '''
-        # with torch.inference_mode():
-        #     self.Q.data = F.normalize(self.Q, p=2, dim=0)
+        with torch.inference_mode():
+            self.Q.data = F.normalize(self.Q, p=2, dim=0)
         E1 = view2pose_torch_batch(c2w)
         translation_matrix = torch.eye(4).to(c2w)
         translation_matrix[:3, 3] = self.axis_origin.view([3])
@@ -451,41 +451,7 @@ class NeRFSeg(nn.Module):
             self.one_hot_activation = OneHotActivation
         else:
             self.one_hot_activation = None
-    # def forward_img(self, batch, randomized, white_bkgd, near, far, skip_seg=False):
-    #     '''
-    #     Used during test time to render the whole image
-    #     '''
-    #     c2w = batch['c2w'].to(torch.float32)
-    #     rays_o, viewdirs, rays_d = get_rays_torch(batch['directions'], c2w[:3, :], output_view_dirs=True)
-
-    #     # split it chunks for training to avoid oom
-    #     chunk_len = rays_o.shape[0] // self.hparams.chunk + 1
-    #     chunk_idxs = torch.arange(0, chunk_len) * self.hparams.chunk
-    #     chunk_idxs[-1] = rays_o.shape[0]
-    #     ret_list = []
-    #     for i in range(len(chunk_idxs) - 1):
-    #         mini_batch = {}
-    #         begin, end = chunk_idxs[i], chunk_idxs[i+1]
-    #         mini_batch['rays_o'] = rays_o[begin: end]
-    #         mini_batch['rays_d'] = rays_d[begin: end]
-    #         mini_batch['viewdirs'] = viewdirs[begin: end]
-    #         mini_ret = self.forward(mini_batch, randomized, white_bkgd, near, far)
-
-    #         ret_list += [mini_ret]
-
-    #     # combine results
-
-    #     combined_ret = {}
-
-    #     # Iterate through the keys in the nested dictionary (e.g., 'level_0', 'level_1', etc.)
-    #     for level_key in ret_list[0].keys():
-    #         combined_ret[level_key] = {}
-    #         # Iterate through the mini-ret results for each level
-    #         for mini_ret in ret_list:
-    #             # Concatenate the values for each key from the mini-ret results
-    #             combined_ret[level_key].update({k: torch.cat([v[level_key][k] for v in ret_list], dim=0)})
-
-    #     return combined_ret
+    
     def warm_up_forward(self, rays, randomized, white_bkgd, near, far):
         ret = {}
         for i_level in range(self.num_levels):
@@ -859,7 +825,9 @@ class NeRFSeg(nn.Module):
                     "density": density,
                     "sample_seg": seg,
                     "opa_part": render_dict['opa_part'],
-                    "comp_seg": render_dict['comp_seg']
+                    "comp_seg": render_dict['comp_seg'],
+                    "dy_comp_rgb": render_dict['dy_comp_rgb'],
+                    "ca_opa": render_dict['ca_opa']
                 }
             else:
                 result = {
@@ -1122,11 +1090,11 @@ class LitNeRFSeg_v2(LitModel):
         test_output["seg"] = ret["seg"]
         return test_output
 
-    # def on_sanity_check_start(self):
-    #     self.sanity_check = True
+    def on_sanity_check_start(self):
+        self.sanity_check = True
         
-    # def on_sanity_check_end(self):
-    #     self.sanity_check = False
+    def on_sanity_check_end(self):
+        self.sanity_check = False
 
     def on_validation_start(self):
         self.random_batch = np.random.randint(1, size=1)[0]
@@ -1697,7 +1665,7 @@ class LitNeRFSegArt(LitModel):
             self.one_hot_loss = OneHotLoss()
         else:
             self.one_hot_loss = None
-
+        self.skip_step = 0
         self.opt_seg = False
         self.art_log_tables = []
         for _ in self.art_list:
@@ -1717,6 +1685,7 @@ class LitNeRFSegArt(LitModel):
             "record_hard_sample": self.hparams.record_hard_sample,
             "near": self.hparams.near,
             "far": self.hparams.far,
+            "use_keypoints": self.hparams.use_keypoints,
         }
         kwargs_val = {
             "root_dir": self.hparams.root_dir,
@@ -1751,13 +1720,14 @@ class LitNeRFSegArt(LitModel):
             self.opacity_criterion = nn.BCELoss()
 
     def train_dataloader(self):
-        return DataLoader(
+        self.__train_loader = DataLoader(
             self.train_dataset,
             shuffle=True,
             num_workers=4,
             batch_size=None,
             pin_memory=True,
         )
+        return self.__train_loader
 
     def val_dataloader(self):
         return DataLoader(
@@ -1799,7 +1769,6 @@ class LitNeRFSegArt(LitModel):
         
         scaled_lr_art = np.exp(np.log(self.lr_art) * (1 - t) + np.log(self.lr_final) * t)
         new_lr_art = delay_rate * scaled_lr_art
-        
         # if step == self.lr_delay_steps:
             # opt_params = []
         local_steps = step - self.hparams.warm_up_steps
@@ -1807,36 +1776,61 @@ class LitNeRFSegArt(LitModel):
             optimizer.step(closure=optimizer_closure)
             return
         elif local_steps == 0:
+            self.__train_loader.dataset.set_regress_pose(True)
             for pg in optimizer.param_groups:
                 if pg['name'] == 'art_Q':
-                    pg['lr'] = self.hparams.lr_art_Q * (0.9 ** (local_steps / 200))
+                    pg['lr'] = self.hparams.lr_art_Q 
                 elif pg['name'] == 'art_T':
                     pg['lr'] == self.hparams.lr_art_T
-                if 'seg' in pg['name']:
+                elif pg['name'] == 'seg':
                     pg['lr'] = 0
         elif local_steps % self.hparams.switching_steps == 0:
             self.opt_seg = not self.opt_seg
             if self.opt_seg:
-                for pg in optimizer.param_groups:
-                    if 'art' in pg['name']:
-                        pg['lr'] = 0
-                    if 'seg' in pg['name']:
-                        pg['lr'] = self.lr_init
-            else:
-                for pg in optimizer.param_groups:
-                    if pg['name'] == 'art_Q':
-                        pg['lr'] = self.hparams.lr_art_Q
-                    elif pg['name'] == 'art_T':
-                        pg['lr'] == self.hparams.lr_art_T
-                    if 'seg' in pg['name']:
-                        pg['lr'] = 0
+                self.skip_step += self.hparams.switching_steps
+            # if self.opt_seg:
+            #     for pg in optimizer.param_groups:
+            #         if 'art' in pg['name']:
+            #             pg['lr'] = 0
+            #         elif pg['name'] == 'seg':
+            #             pg['lr'] = self.lr_init
+            #     # self.train_dataset.pose_regress = False
+            #     # self.__train_loader.dataset.set_regress_pose(False)
+            # else:
+            #     self.__train_loader.dataset.set_regress_pose(True)
+            #     for pg in optimizer.param_groups:
+            #         if pg['name'] == 'art_Q':
+            #             pg['lr'] = self.hparams.lr_art_Q
+            #         elif pg['name'] == 'art_T':
+            #             pg['lr'] == self.hparams.lr_art_T
+            #         elif pg['name'] == 'seg':
+            #             pg['lr'] = 0
 
-        new_lr_Q = self.hparams.lr_art_Q * (0.5 ** (local_steps / 200))
+        lr_q_decay = (0.8 ** ((local_steps - self.skip_step) / 200))
+        new_lr_Q = self.hparams.lr_art_Q * lr_q_decay
 
-        for pg in optimizer.param_groups:
-            if pg['name'] == 'art_Q':
-                if pg['lr'] != 0:
-                    pg['lr'] = max(new_lr_Q, 1e-2)
+        if self.opt_seg:
+            for pg in optimizer.param_groups:
+                if 'art' in pg['name']:
+                    pg['lr'] = 0
+                elif pg['name'] == 'seg':
+                    pg['lr'] = self.lr_init
+        
+
+        # if not self.opt_seg:
+        #     for pg in optimizer.param_groups:
+        #         if pg['name'] == 'art_Q':
+        #             if pg['lr'] != 0:
+        #                 pg['lr'] = max(new_lr_Q, 1e-3)
+
+        if not self.opt_seg:
+            for pg in optimizer.param_groups:
+                if pg['name'] == 'art_T':
+                    pg['lr'] = self.hparams.lr_art_T 
+                elif pg['name'] == 'art_Q':
+                    pg['lr'] = max(new_lr_Q, 5e-4)
+                elif pg['name'] == 'seg':
+                    pg['lr'] = 0
 
         optimizer.step(closure=optimizer_closure)
             
@@ -2113,6 +2107,26 @@ class LitNeRFSegArt(LitModel):
             seg_occ_loss_1 = bceloss(seg_occ_1_clamped, opa_target.view(-1))
             seg_occ_loss = seg_occ_loss_0 + seg_occ_loss_1
 
+            # masked rgb loss for art estimation
+            ca_opa_0 = rendered_results['level_0']['ca_opa']
+            ca_opa_1 = rendered_results['level_1']['ca_opa']
+            dy_comp_rgb_0 = rendered_results['level_0']['dy_comp_rgb']
+            dy_comp_rgb_1 = rendered_results['level_1']['dy_comp_rgb']
+
+            with torch.inference_mode():
+                over_lap_0 = opa_target * ca_opa_0.view([-1, 1])
+                over_lap_1 = opa_target * ca_opa_1.view([-1, 1])
+                over_lap_0[over_lap_0 >= 0.5] = 1
+                over_lap_0[over_lap_0 < 0.5] = 0
+                over_lap_1[over_lap_1 >= 0.5] = 1
+                over_lap_1[over_lap_1 < 0.5] = 0
+                valid_idx_0 = 1 - over_lap_0
+                valid_idx_1 = 1 - over_lap_1
+            prob_0 = valid_idx_0.clone()
+            prob_1 = valid_idx_1.clone()
+            rgb_dy_0 = helper.img2mse_weighted(dy_comp_rgb_0, rgb_target, prob_0)
+            rgb_dy_1 = helper.img2mse_weighted(dy_comp_rgb_1, rgb_target, prob_1)
+
             def mean_pairwise_absolute_difference(numbers):
                 n = len(numbers)
                 
@@ -2142,9 +2156,13 @@ class LitNeRFSegArt(LitModel):
             if self.hparams.fine_level_loss_only:
                 raise RuntimeError('fine_level_only is deprecated!')
                 
-            loss = loss1 + loss0
-            rgb_loss = loss
-            self.log("train/rgb_loss", rgb_loss, on_step=True, logger=True)
+            if self.hparams.use_part_rgb_loss & (not self.opt_seg): # do part rgb loss during pose regression
+                loss = rgb_dy_0 + rgb_dy_1
+                self.log("train/rgb_part_loss", loss, on_step=True, logger=True)
+            else:
+                loss = loss1 + loss0
+                rgb_loss = loss
+                self.log("train/rgb_loss", rgb_loss, on_step=True, logger=True)
             if self.hparams.use_opa_loss:
                 loss = loss + (opa_loss_0 + opa_loss_1)
                 self.log("train/opa_loss_0", opa_loss_0, on_step=True, logger=True)
@@ -2361,7 +2379,7 @@ class LitNeRFSegArt(LitModel):
                 seg_lr = pg['lr']
             elif pg['name'] == 'art_Q':
                 art_lr_Q = pg['lr']
-            else:
+            elif pg['name'] == 'art_T':
                 art_lr_T = pg['lr']
 
         self.log('train/seg_lr', seg_lr, on_step=True, prog_bar=False, logger=True)
@@ -2586,8 +2604,8 @@ class LitNeRFSegArt(LitModel):
                 "directions":self.directions
             }
         """
-        # if self.sanity_check:
-        #     return
+        if self.sanity_check & self.hparams.skip_sanity_check:
+            return
         for k, v in batch.items():
             if k == "obj_idx":
                 continue
@@ -2646,8 +2664,8 @@ class LitNeRFSegArt(LitModel):
         self.sanity_check = False
 
     def validation_epoch_end(self, outputs):
-        # if self.sanity_check:
-        #     return
+        if self.sanity_check & self.hparams.skip_sanity_check:
+            return
         psnr = sum(ret['psnr'] for ret in outputs) / len(outputs)
         self.log("val/psnr", psnr, on_epoch=True)
         
@@ -2999,3 +3017,4 @@ def compose_img_by_depth(rgb_list, depth_list):
         torch.save(depth_list[i], depth_name)
 
     return final_rgb
+

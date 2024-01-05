@@ -571,11 +571,22 @@ class SapienArtSegDataset(SapienDataset):
         
 
 class SapienArtSegDataset_v2(SapienArtSegDataset):
-    def __init__(self, root_dir, split='train', img_wh=(320, 240), model_type=None, white_back=None, eval_inference=None, record_hard_sample=False, near=2, far=6):
+    def __init__(self, root_dir, split='train', img_wh=(320, 240), model_type=None, white_back=None, eval_inference=None, record_hard_sample=False, near=2, far=6, use_keypoints=False):
         super().__init__(root_dir, split, img_wh, model_type, white_back, eval_inference, record_hard_sample, near, far)
         self.ray_sampling_strategy = 'all_images'
         self.batch_size = 2048
-
+        self.use_keypoints = use_keypoints
+        self.kp_idx = None 
+        self.pose_regress = False
+        self.kpt = None
+        is_train = (self.split == 'train')
+        if self.use_keypoints & is_train:
+            kpt_fname = P(self.root_dir) / self.split / 'keypoitns.npy'
+            kpt_fname = str(kpt_fname)
+            kpt = np.load(kpt_fname, allow_pickle=True)
+            self.kpt = kpt
+            self.kps_idx = self.get_keypoint_idx()
+            
     def cache_data(self):
         dataset_path = P(self.root_dir)
         cur_path = dataset_path / self.split
@@ -609,7 +620,7 @@ class SapienArtSegDataset_v2(SapienArtSegDataset):
         else:
             return len(self.image_list)
 
-    def _get_idx(self):
+    def __get_idx(self):
         if self.ray_sampling_strategy == 'all_images': # randomly select images
             img_idxs = np.random.choice(len(self.poses), self.batch_size)
         elif self.ray_sampling_strategy == 'same_image': # randomly select ONE image
@@ -618,8 +629,46 @@ class SapienArtSegDataset_v2(SapienArtSegDataset):
         pix_idxs = np.random.choice(self.img_wh[0]*self.img_wh[1], self.batch_size)
         return img_idxs, pix_idxs
 
+    def __get_seq_idx(self, idx):
+        idx_start = idx * self.batch_size
+        idx_end = (idx+1) * self.batch_size
+        idxs = np.arange(idx_start, idx_end)
+        N = self.rgb.shape[0] * self.rgb.shape[1]
+        idxs = idxs % N
+        img_size = self.rgb.shape[1]
+        img_idxs = idxs // img_size
+        pix_idxs = idxs % img_size
+        return img_idxs, pix_idxs
+
+    def get_keypoint_idx(self):
+        kp_idx = []
+        w, h = self.img_wh
+        for idx, kpt in enumerate(self.kpt):
+            kpt_i = kpt[:, 1]
+            kpt_j = kpt[:, 0]
+            cur_kp_idx = kpt_i * w + kpt_j + w * h * idx
+            kp_idx += [torch.LongTensor(cur_kp_idx)]
+        return torch.cat(kp_idx)
+    
+    def __get_train_keypoint_idx(self):
+        idxs = np.random.choice(len(self.kps_idx), self.batch_size)
+        kp_idx = self.kps_idx[idxs]
+        w, h = self.img_wh
+        img_idx = kp_idx // (w * h)
+        pix_idx = kp_idx % (w * h)
+        
+        return img_idx, pix_idx
+    
+    def set_regress_pose(self, pose_regress=True):
+        self.pose_regress = pose_regress
+        return
+
     def _get_train_item(self, idx):
-        img_idxs, pix_idxs = self._get_idx()
+        if self.pose_regress & self.use_keypoints:
+            img_idxs, pix_idxs = self.__get_train_keypoint_idx()
+        else:
+            # img_idxs, pix_idxs = self.__get_seq_idx(idx)
+            img_idxs, pix_idxs = self.__get_idx()
         ret_dict = {
             'rgb': self.rgb[img_idxs, pix_idxs],
             'dirs': self.dirs[img_idxs, pix_idxs],

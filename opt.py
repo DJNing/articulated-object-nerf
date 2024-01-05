@@ -264,6 +264,9 @@ def get_parser():
     parser.add_argument('--obj_type', type=str, default='laptop', help="laptop or stapler")
     parser.add_argument('--warm_up_steps', type=int, default=500, help="laptop or stapler")
     parser.add_argument('--switching_steps', type=int, default=500, help="laptop or stapler")
+    parser.add_argument('--use_part_rgb_loss', type=bool, default=False, help="calculate loss for part rgb instead of composite rgb")
+    parser.add_argument('--use_keypoints', type=bool, default=False, help="whether to use key point for pose regression")
+    parser.add_argument('--skip_sanity_check', type=bool, default=False, help="whether to pass sanity check")
     
     return parser
 
