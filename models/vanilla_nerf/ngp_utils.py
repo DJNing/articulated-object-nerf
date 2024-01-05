@@ -161,7 +161,7 @@ class NGPRadianceField(torch.nn.Module):
                 },
             )
             
-        self.use_seg_head == use_seg_head
+        self.use_seg_head = use_seg_head
         self.seg_output_dim = seg_output_dim
         self.seg_activation = torch.nn.Softmax(dim=1)
         if self.use_seg_head:

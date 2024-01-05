@@ -267,6 +267,9 @@ def get_parser():
     parser.add_argument('--use_part_rgb_loss', type=bool, default=False, help="calculate loss for part rgb instead of composite rgb")
     parser.add_argument('--use_keypoints', type=bool, default=False, help="whether to use key point for pose regression")
     parser.add_argument('--skip_sanity_check', type=bool, default=False, help="whether to pass sanity check")
+    parser.add_argument('--grid_res', type=int, default=128, help="whether to pass sanity check")
+    parser.add_argument('--grid_nlvl', type=int, default=1, help="whether to pass sanity check")
+    parser.add_argument('--aabb', type=float, nargs="+", default=[-1, -1, -1, 1, 1, 1], help="bbox size for the object")
     
     return parser
 
