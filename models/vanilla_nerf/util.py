@@ -11,6 +11,10 @@ import warnings
 from scipy.spatial.transform import Rotation
 from torch.quasirandom import SobolEngine
 
+
+
+
+
 def sample_uniform_quaternions_torch(base_quaternion, N, angle_range):
     sobol_engine = SobolEngine(dimension=3, scramble=True)
     angles = 2 * angle_range * sobol_engine.draw(N) - angle_range # in [-angle_range, angle_range]
@@ -23,7 +27,39 @@ def sample_uniform_quaternions_torch(base_quaternion, N, angle_range):
     ret_quat = torch.Tensor(final_quat).to(base_quaternion)
     return ret_quat
 
+def get_rays_torch_multiple_c2w(directions, c2w, output_view_dirs=False):
+    """
+    Get ray origin and normalized directions in world coordinates for all pixels in one image.
 
+    Inputs:
+        directions: (N, 3) precomputed ray directions in camera coordinates
+        c2w: (N, 3, 4) transformation matrix from camera coordinates to world coordinates
+        output_view_dirs: If True, also output view directions.
+
+    Outputs:
+        rays_o: (N, 3), the origin of the rays in world coordinates
+        rays_d: (N, 3), the normalized direction of the rays in world coordinates
+        viewdirs (optional): (N, 3), the view directions in world coordinates
+    """
+    # Calculate rays_d (directions in world coordinates)
+    c2w_T = c2w[:, :, :3].transpose(1, 2) # (N, 3, 3)
+    dirs = directions.unsqueeze(1) # (N, 1, 3)
+    rays_d = torch.matmul(dirs, c2w_T)  # (N, 1, 3)
+    rays_d = rays_d.squeeze(1) # (N, 3)
+
+    # Calculate rays_o (ray origins in world coordinates)
+    rays_o = c2w[:, :, 3]  # (N, 3)
+
+    if output_view_dirs:
+        # Normalize view directions
+        viewdirs = rays_d.clone()
+        viewdirs /= torch.norm(viewdirs.clone(), dim=-1, keepdim=True)  # (N, 3)
+        return rays_o, viewdirs, rays_d
+    else:
+        # Normalize rays_d
+        rays_d /= torch.norm(rays_d, dim=1, keepdim=True)  # (N, 3)
+        return rays_o, rays_d
+    
 def sample_uniform_quaternions(base_quaternion, num_samples, angle_ranges):
     """
     Generate N uniformly sampled quaternions within specified angle ranges.

@@ -15,6 +15,9 @@ import torch.nn.init as init
 from models.interface import LitModel
 import models.vanilla_nerf.helper as helper
 import torchvision.transforms as T
+from models.vanilla_nerf.util import get_rays_torch_multiple_c2w
+from datasets.ray_utils import get_rays_ngp, transform2NGP_T
+from models.vanilla_nerf.model_nerfseg import ArticulationEstimation
 
 '''
 aabb: bounxing boxes for the object, examples: torch.tensor([-1.5, -1.5, -1.5, 1.5, 1.5, 1.5], device=device)
@@ -40,10 +43,22 @@ class LitNeRFAcc(LitModel):
         super(LitNeRFAcc, self).__init__()
         self.hparams.white_back = False
         aabb = torch.Tensor(np.array(self.hparams.aabb))
+        
+        bbx_size = np.array(self.hparams.bbx_size)
+        bbx_pose = np.array(self.hparams.bbx_pose)
+        if self.hparams.ngp_coord:
+            bbx_size = transform2NGP_T(bbx_size).reshape(-1)
+            bbx_pose = transform2NGP_T(bbx_pose).reshape(-1)
+        xyz_max = bbx_size + bbx_pose
+        xyz_min = -bbx_size + bbx_pose
+        aabb = np.concatenate((xyz_min, xyz_max))
+        aabb = torch.Tensor(aabb)
         grid_res = self.hparams.grid_res
         grid_nlvl = self.hparams.grid_nlvl
         self.estimator = OccGridEstimator(roi_aabb=aabb, resolution=grid_res, levels=grid_nlvl)
-        self.radience_field = ngp.NGPRadianceField(self.estimator.aabbs[-1])
+        self.estimator.binaries[:] = True
+        self.radiance_field = ngp.NGPRadianceField(self.estimator.aabbs[-1])
+        self.render_step_size = 5e-3
     
     def setup(self, stage: Optional[str] = None) -> None:
         dataset = dataset_dict[self.hparams.dataset_name]
@@ -59,6 +74,7 @@ class LitNeRFAcc(LitModel):
             "near": self.hparams.near,
             "far": self.hparams.far,
             "use_keypoints": self.hparams.use_keypoints,
+            "ngp_coord": self.hparams.ngp_coord,
         }
         kwargs_val = {
             "root_dir": self.hparams.root_dir,
@@ -67,6 +83,7 @@ class LitNeRFAcc(LitModel):
             "model_type": "vanilla_nerf",
             "near": self.hparams.near,
             "far": self.hparams.far,
+            "ngp_coord": self.hparams.ngp_coord,
         }
         
         if self.hparams.run_eval:
@@ -78,6 +95,7 @@ class LitNeRFAcc(LitModel):
                 "eval_inference": self.hparams.render_name,
                 "near": self.hparams.near,
                 "far": self.hparams.far,
+                "ngp_coord": self.hparams.ngp_coord,
             }
             self.test_dataset = dataset(split="test", **kwargs_test)
             self.near = self.test_dataset.near
@@ -145,40 +163,58 @@ class LitNeRFAcc(LitModel):
             pg["lr"] = new_lr
 
         optimizer.step(closure=optimizer_closure)
+        self.log('train/lr', new_lr, on_step=True, logger=True)
         pass
     
     def configure_optimizers(self):
         return torch.optim.Adam(
-            params=self.radience_field.parameters(), lr=self.lr_init, betas=(0.9, 0.999)
+            params=self.radiance_field.parameters(), lr=self.lr_init, betas=(0.9, 0.999)
             )
+    def on_train_batch_start(self, batch, batch_idx) -> None:
+
+        def occ_eval_fn(x):
+            sigma= self.radiance_field.query_density(x)
+            return sigma * self.render_step_size
+        self.estimator.update_every_n_steps(step=self.global_step, occ_eval_fn=occ_eval_fn)
+
+        return super().on_train_batch_start(batch, batch_idx)
     
     def forward(self, batch):
         rays_o = batch['rays_o']
         rays_d = batch['rays_d']
+
         def sigma_fn(t_starts, t_ends, ray_indices):
             ray_indices = ray_indices.long()
             t_origins = rays_o[ray_indices]
             t_dirs = rays_d[ray_indices]
-            positions = t_origins + t_dirs * (t_starts + t_ends) / 2.
-            sigma= self.radience_field.query_density(positions)
+            positions = t_origins + t_dirs * (t_starts + t_ends).unsqueeze(-1) / 2.
+            sigma= self.radiance_field.query_density(positions)
             return sigma.squeeze(-1)
         
         def rgb_sigma_fn(t_starts, t_ends, ray_indices):
             t_origins = rays_o[ray_indices]
             t_dirs = rays_d[ray_indices]
-            positions = t_origins + t_dirs * (t_starts + t_ends)[:, None] / 2.0
+            positions = t_origins + t_dirs * (t_starts + t_ends).unsqueeze(-1) / 2.0
             rgbs, sigmas = self.radiance_field(positions, t_dirs)
             return rgbs, sigmas.squeeze(-1)
         
+        # def occ_eval_fn(x):
+        #     sigma= self.radiance_field.query_density(x)
+        #     return sigma * render_step_size
+
         ray_indices, t_starts, t_ends = self.estimator.sampling(
             rays_o,
             rays_d,
             sigma_fn=sigma_fn,
-            render_step_size=5e-3,
+            render_step_size=self.render_step_size,
+            near_plane=self.hparams.near,
+            far_plane=self.hparams.far,
             stratified=self.radiance_field.training
         )
-        
-        rgb, opa, depth, extras = nerfacc.rendering(t_starts, t_ends, ray_indices, rgb_sigma_fn=rgb_sigma_fn)
+        # if self.training:
+        #     self.estimator.update_every_n_steps(step=self.global_step, occ_eval_fn=sigma_fn)
+        rgb, opa, depth, extras = nerfacc.rendering(t_starts, t_ends, ray_indices, 
+                                                    n_rays=rays_o.shape[0], rgb_sigma_fn=rgb_sigma_fn)
         
         # ret_dict = {
         #     'rgb': rgb,
@@ -194,7 +230,18 @@ class LitNeRFAcc(LitModel):
                 continue
             batch[k] = v.squeeze(0)
             
-        rgb, opa, depth, extras = self.forward(batch)
+        c2w = batch['c2w']
+        dirs = batch['dirs']
+        if self.hparams.ngp_coord:
+            rays_o, rays_d = get_rays_ngp(dirs, c2w[:, :3, :])
+        else:
+            rays_o, viewdirs, rays_d = get_rays_torch_multiple_c2w(dirs, c2w[:, :3, :], output_view_dirs=True)
+        forward_dict = {
+            'rays_o': rays_o,
+            'rays_d': rays_d
+        }
+
+        rgb, opa, depth, extras = self.forward(forward_dict)
         
         rgb_target = batch['rgb']
         
@@ -212,17 +259,24 @@ class LitNeRFAcc(LitModel):
             batch[k] = v.squeeze(0)
             
         chunk = self.hparams.forward_chunk
-        N = batch['rays_o'].shape[0]
+        c2w = batch['c2w']
+        dirs = batch['dirs']
+        N = dirs.shape[0]
+        
+        if self.hparams.ngp_coord:
+            rays_o, rays_d = get_rays_ngp(dirs, c2w[:, :3, :])
+        else:
+            rays_o, viewdirs, rays_d = get_rays_torch_multiple_c2w(dirs, c2w[:, :3, :], output_view_dirs=True)
         rgb_list = []
         depth_list = []
         for i in range(0, N, chunk):
             start_idx = i
             end_idx = min(i+chunk, N)
             mini_batch = {
-                "rays_o": batch["rays_o"][start_idx:end_idx],
-                "rays_d": batch["rays_d"][start_idx:end_idx],
+                "rays_o": rays_o[start_idx:end_idx],
+                "rays_d": rays_d[start_idx:end_idx],
             }
-            rgb, opa, depth, extras = self.forward(batch)
+            rgb, opa, depth, extras = self.forward(mini_batch)
             rgb_list += [rgb]
             depth_list += [depth]
         
@@ -235,7 +289,7 @@ class LitNeRFAcc(LitModel):
             return pil_img
         pred_img = toPIL(pred_rgb, H, W)
         # pred_depth_pil = toPIL(pred_depth, H, W, 1)
-        gt = batch['rgb']
+        gt = batch['img']
         mse = helper.img2mse(pred_rgb, gt)
         psnr = helper.mse2psnr(mse)
         gt_img = toPIL(gt, H, W)

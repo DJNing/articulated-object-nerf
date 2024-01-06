@@ -267,10 +267,14 @@ def get_parser():
     parser.add_argument('--use_part_rgb_loss', type=bool, default=False, help="calculate loss for part rgb instead of composite rgb")
     parser.add_argument('--use_keypoints', type=bool, default=False, help="whether to use key point for pose regression")
     parser.add_argument('--skip_sanity_check', type=bool, default=False, help="whether to pass sanity check")
-    parser.add_argument('--grid_res', type=int, default=128, help="whether to pass sanity check")
-    parser.add_argument('--grid_nlvl', type=int, default=1, help="whether to pass sanity check")
+    parser.add_argument('--grid_res', type=int, default=256, help="whether to pass sanity check")
+    parser.add_argument('--grid_nlvl', type=int, default=2, help="whether to pass sanity check")
     parser.add_argument('--aabb', type=float, nargs="+", default=[-1, -1, -1, 1, 1, 1], help="bbox size for the object")
-    
+    parser.add_argument('--ngp_coord', type=bool, default=False, help="bbox size for the object")
+    parser.add_argument('--bbx_size', type=float, nargs="+", default=None,
+                        help='specify bounding box size for object, used in sapien')
+    parser.add_argument('--bbx_pose', type=float, nargs="+", default=None,
+                        help='specify bounding box position for object, used in sapien')
     return parser
 
 def get_opts():

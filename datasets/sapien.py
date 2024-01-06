@@ -404,7 +404,7 @@ class SapienArtSegDataset(SapienDataset):
 
     def __init__(self, root_dir, split='train', img_wh=(320, 240), 
                  model_type=None, white_back=None, eval_inference=None,
-                 record_hard_sample=False, near=2.0, far=6.0):
+                 record_hard_sample=False, near=2.0, far=6.0, ngp_coord=False):
         # super().__init__(root_dir, split, img_wh, model_type, white_back, eval_inference)
         self.root_dir = root_dir
         self.img_wh = img_wh
@@ -418,7 +418,7 @@ class SapienArtSegDataset(SapienDataset):
         self.use_sample_list = False
         self.near = near
         self.far = far
-        
+        self.ngp_coord = ngp_coord
         self.split = split
         # if split == 'train':
         #     self.split = 'train'
@@ -440,11 +440,25 @@ class SapienArtSegDataset(SapienDataset):
         self.focal = None
         w, h = img_wh
         self.focal = self.meta_dict['focal']
-        self.directions = \
-            get_ray_directions(h, w, self.focal) # (h, w, 3)
+        if self.ngp_coord:
+            self.directions = self.get_ngp_directions()
+        else:
+            self.directions = \
+                get_ray_directions(h, w, self.focal) # (h, w, 3)
         # if self.split == 'train':
             # self.cache_data_fg_only()
         self.cache_data()
+
+    def get_ngp_directions(self):
+        w, h = self.img_wh
+        K = np.float32([[self.focal, 0, w/2],
+                        [0, self.focal, h/2],
+                        [0,  0,   1]])
+        
+        self.K = torch.FloatTensor(K)
+        return get_ray_directions_ngp(h, w, self.K)
+        
+    
 
     def read_meta(self):
         dataset_path = P(self.root_dir)
@@ -553,7 +567,10 @@ class SapienArtSegDataset(SapienDataset):
         img = img.view([-1, 3])
         img_name = 'r_' + str(idx)
         c2w = self.meta_dict['frames'][img_name]
-        c2w = torch.Tensor(np.array(c2w)).unsqueeze(0).repeat(img.shape[0], 1, 1)
+        pose = np.array(c2w)
+        if self.ngp_coord:
+            pose = transfrom_to_NGP(pose)
+        c2w = torch.Tensor(pose).unsqueeze(0).repeat(img.shape[0], 1, 1)
         ret_dict = {
             'img': img,
             'c2w': c2w,
@@ -571,8 +588,11 @@ class SapienArtSegDataset(SapienDataset):
         
 
 class SapienArtSegDataset_v2(SapienArtSegDataset):
-    def __init__(self, root_dir, split='train', img_wh=(320, 240), model_type=None, white_back=None, eval_inference=None, record_hard_sample=False, near=2, far=6, use_keypoints=False):
-        super().__init__(root_dir, split, img_wh, model_type, white_back, eval_inference, record_hard_sample, near, far)
+    def __init__(self, root_dir, split='train', img_wh=(320, 240), model_type=None, 
+                 white_back=None, eval_inference=None, record_hard_sample=False, 
+                 near=2, far=6, use_keypoints=False, ngp_coord=False):
+        super().__init__(root_dir, split, img_wh, model_type, white_back, eval_inference, 
+                         record_hard_sample, near, far, ngp_coord=ngp_coord)
         self.ray_sampling_strategy = 'all_images'
         self.batch_size = 2048
         self.use_keypoints = use_keypoints
@@ -598,8 +618,12 @@ class SapienArtSegDataset_v2(SapienArtSegDataset):
             self.seg += [self.load_seg(seg_name)]
             valid_mask = (img[:, -1]).view([-1, 1])
             img = img[:, :3]*img[:, -1:] # use black background
-            self.poses += [torch.Tensor(np.array(v)).unsqueeze(0)]
-            self.c2w += [torch.Tensor(np.array(v)).unsqueeze(0).repeat(img.shape[0], 1, 1)]
+            if self.ngp_coord:
+                pose = transfrom_to_NGP(np.array(v))
+            else:
+                pose = np.array(v)
+            self.poses += [torch.Tensor(pose).unsqueeze(0)]
+            self.c2w += [torch.Tensor(pose).unsqueeze(0).repeat(img.shape[0], 1, 1)]
             self.rgb += [img]
             self.mask += [valid_mask]
         

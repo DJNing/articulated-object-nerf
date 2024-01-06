@@ -334,27 +334,3 @@ class NGPDensityField(torch.nn.Module):
         )
         return density
     
-def render_image_with_occgrid(
-    radiance_filed: torch.nn.Module,
-    estimator: OccGridEstimator,
-    rays: dict,
-    near: float=0.0,
-    far: float=1e10,
-    render_step_size: float = 1e-3,
-    render_bkgd = None,
-    sigma_fn = None,
-    rgb_sigma_fn = None,
-    rgb_fn = None
-):
-    rays_o = rays['rays_o']
-    rays_d = rays['rays_d']
-    viewdirs = rays['viewdirs']
-    
-    def sigma_fn_default(t_starts, t_ends, ray_indices):
-        t_origins = rays_o[ray_indices]
-        t_dirs = rays_d[ray_indices]
-        positions = t_origins + t_dirs * (t_starts + t_ends)[:, None] / 2.0
-        sigmas = radiance_field.query_density(positions)
-        return sigmas.squeeze(-1)
-    
-    pass
