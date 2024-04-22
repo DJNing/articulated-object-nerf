@@ -47,17 +47,48 @@ class Ellipsoid(nn.Module):
     def __init__(self, rand_init=True, scale=4) -> None:
         super().__init__()
         extent = torch.rand(3)
-        self.extent = nn.Parameter(extent, requires_grad=True)
+        self.center = nn.Parameter(extent, requires_grad=True)
         scale_vecotr = torch.rand(3)
         self.semi_axis = nn.Parameter(scale_vecotr, requires_grad=True)
         self.scale = scale
-        
+        self.local_R = nn.Parameter(torch.Tensor([1, 0, 0, 0]), requires_grad=True)
+        self.local_T = nn.Parameter(torch.Tensor([0, 0, 0]), requires_grad=True).reshape(1, 3)
+    
+    def project_points(self, x):
+        rot = R_from_quaternions(self.local_R)
+        pos = x - self.local_T
+        pos = torch.matmul(rot, pos.T).T
+        pos = pos + self.local_T
+        return pos
+    
     def forward(self, x):
         '''
         x: positions of the points
         '''
-        pass
-    
+        x = self.project_points(x)
+        # Normalize the point and ellipse_extent
+        normalized_point = (x - self.center) / self.semi_axis
+        # Calculate the squared distance from the normalized point to the ellipse center
+        squared_distance = torch.sum(normalized_point**2, dim=-1)
+        
+        # Use a differentiable threshold (e.g., sigmoid) to obtain a binary mask
+        scaled_value = self.scale(1.0 - squared_distance)
+        binary_mask = torch.sigmoid(scaled_value)
+        
+        return binary_mask
+
+class ArticulationMLP(nn.Module):
+    def __init__(self, hparam, hidden_num=2):
+        super(ArticulationMLP, self).__init__()
+        init_layer = [torch.nn.Linear(3, 16)]
+        final_layer = [torch.nn.Linear(16, 3)]
+        hidden_layer = hidden_num * [torch.nn.Linear(16, 16)]
+        mlp = init_layer + hidden_layer + final_layer
+        self.mlp = torch.nn.Sequential(*mlp)
+        
+    def forward(self, x):
+        return self.mlp(x)
+
 class ArticulationEstimation(nn.Module):
     '''
     Current implemetation for revolute only
@@ -301,7 +332,7 @@ class NeRFMLPSeg(nn.Module):
         init.xavier_uniform_(self.rgb_layer.weight)
         
 
-    def forward(self, x, condition, part_code, pos_raw):
+    def forward(self, x, condition, pos_raw):
         ray_num, num_samples, feat_dim = x.shape
         x = x.reshape(-1, feat_dim)
         inputs = x
@@ -327,7 +358,8 @@ class NeRFMLPSeg(nn.Module):
                 seg_input = x
 
             if self.use_part_condition:
-                seg_input = torch.cat((seg_input, part_code), dim=-1)
+                # seg_input = torch.cat((seg_input, part_code), dim=-1)
+                raise RuntimeError('use_part_condition is deprecated!')
             # raw_seg = self.seg_layer(seg_input).reshape(-1, num_samples, self.seg_out_dim)
             init_seg = self.seg_layer(seg_input)#.reshape(-1, num_samples, self.seg_out_dim)
 
@@ -452,7 +484,7 @@ class NeRFSeg(nn.Module):
         else:
             self.one_hot_activation = None
     
-    def warm_up_forward(self, rays, randomized, white_bkgd, near, far):
+    def warm_up_forward(self, rays, randomized, white_bkgd, near, far, use_ellipsoid=False):
         ret = {}
         for i_level in range(self.num_levels):
             if i_level == 0:
@@ -490,7 +522,6 @@ class NeRFSeg(nn.Module):
             forward_dict = {
                 'x': samples_enc,
                 'condition': viewdirs_enc,
-                'part_code': None,
                 'pos_raw': samples
             }
 
@@ -536,8 +567,7 @@ class NeRFSeg(nn.Module):
         rays = {
             'rays_o': rays_o,
             'rays_d': rays_d,
-            'viewdirs': viewdirs,
-            'part_code': batch.get('part_code', None)
+            'viewdirs': viewdirs
         }
         if warm_up:
             render_dict = self.warm_up_forward(rays, randomized, white_bkgd, near, far)    
@@ -545,58 +575,7 @@ class NeRFSeg(nn.Module):
             render_dict = self.forward(rays, randomized, white_bkgd, near, far)
         return render_dict
 
-    def forward_mlp(self, samples, viewdirs, part_code, randomized, mlp):
-        samples_enc = helper.pos_enc(
-            samples,
-            self.min_deg_point,
-            self.max_deg_point,
-        )
-        viewdirs_enc = helper.pos_enc(viewdirs, 0, self.deg_view)
-        # part_code = rays.get('part_code', None)
         
-        if part_code is None:
-            raise RuntimeError('part_code not found')
-        part_num = part_code.shape[-1]
-        part_code = part_code.unsqueeze(1).repeat(1, samples_enc.shape[1], 1)
-        part_code = part_code.view([-1, part_num])
-        if self.hparams.use_part_condition:
-            forward_dict = {
-                "x":samples_enc,
-                "condition":viewdirs_enc,
-                "part_code":part_code,
-                "pos_raw":samples
-            }
-            
-        else:
-            forward_dict = {
-                "x":samples_enc,
-                "condition":viewdirs_enc,
-                "part_code":None,
-                "pos_raw":samples
-            }
-
-        mlp_ret_dict = mlp(**forward_dict)
-        raw_rgb = mlp_ret_dict['raw_rgb']
-        raw_density = mlp_ret_dict['raw_density']
-        
-        raw_seg = mlp_ret_dict['raw_seg']
-
-        if self.noise_std > 0 and randomized:
-            raw_density = raw_density + torch.rand_like(raw_density) * self.noise_std
-
-        rgb = self.rgb_activation(raw_rgb)
-        density = self.sigma_activation(raw_density)
-        seg = self.seg_activation(raw_seg)
-        if self.one_hot_activation is not None:
-            seg = self.one_hot_activation(seg)
-
-        
-        result = {
-            "rgb": rgb,
-            "density": density,
-            "seg": seg
-        }
-        return result
 
     def forward_composite_rendering(self, rays, randomized, white_bkgd, near, far, seg_feat=False):
         ret = {}
@@ -635,18 +614,18 @@ class NeRFSeg(nn.Module):
                 self.max_deg_point,
             )
             viewdirs_enc = helper.pos_enc(rays["viewdirs"], 0, self.deg_view)
-            part_code = rays.get('part_code', None)
+            # part_code = rays.get('part_code', None)
             
-            if part_code is None:
-                raise RuntimeError('part_code not found')
-            part_num = part_code.shape[-1]
-            part_code = part_code.unsqueeze(1).repeat(1, samples_enc.shape[1], 1)
-            part_code = part_code.view([-1, part_num])
+            # if part_code is None:
+            #     raise RuntimeError('part_code not found')
+            # part_num = part_code.shape[-1]
+            # part_code = part_code.unsqueeze(1).repeat(1, samples_enc.shape[1], 1)
+            # part_code = part_code.view([-1, part_num])
             if self.hparams.use_part_condition:
                 forward_dict = {
                     "x":samples_enc,
                     "condition":viewdirs_enc,
-                    "part_code":part_code,
+                    # "part_code":part_code,
                     "pos_raw":samples
                 }
                 
@@ -654,7 +633,7 @@ class NeRFSeg(nn.Module):
                 forward_dict = {
                     "x":samples_enc,
                     "condition":viewdirs_enc,
-                    "part_code":None,
+                    # "part_code":None,
                     "pos_raw":samples
                 }
 
@@ -720,18 +699,18 @@ class NeRFSeg(nn.Module):
                 self.max_deg_point,
             )
             viewdirs_enc = helper.pos_enc(rays["viewdirs"], 0, self.deg_view)
-            part_code = rays.get('part_code', None)
+            # part_code = rays.get('part_code', None)
             
-            if part_code is None:
-                raise RuntimeError('part_code not found')
-            part_num = part_code.shape[-1]
-            part_code = part_code.unsqueeze(1).repeat(1, samples_enc.shape[1], 1)
-            part_code = part_code.view([-1, part_num])
+            # if part_code is None:
+                # raise RuntimeError('part_code not found')
+            # part_num = part_code.shape[-1]
+            # part_code = part_code.unsqueeze(1).repeat(1, samples_enc.shape[1], 1)
+            # part_code = part_code.view([-1, part_num])
             if self.hparams.use_part_condition:
                 forward_dict = {
                     "x":samples_enc,
                     "condition":viewdirs_enc,
-                    "part_code":part_code,
+                    # "part_code":part_code,
                     "pos_raw":samples
                 }
                 
@@ -739,7 +718,7 @@ class NeRFSeg(nn.Module):
                 forward_dict = {
                     "x":samples_enc,
                     "condition":viewdirs_enc,
-                    "part_code":None,
+                    # "part_code":None,
                     "pos_raw":samples
                 }
 
@@ -796,20 +775,21 @@ class NeRFSeg(nn.Module):
                     part_rgb, part_density, t_vals, rays['rays_d'], part_seg, self.hparams.rgb_activation
                 )
             else:
+                raise RuntimeError('deprecated!')
                 # select the right seg to feed in rendering
                 # get idx from part_code
-                idx = torch.argmax(part_code, dim=-1)
-                idx = idx.view(seg.shape[0], seg.shape[1], 1)
-                seg_mask = torch.gather(seg, -1, idx)
-                render_dict = helper.volumetric_rendering_seg_mask(
-                    rgb,
-                    density,
-                    t_vals,
-                    rays['rays_d'],
-                    white_bkgd=white_bkgd,
-                    seg_mask=seg_mask,
-                    seg=seg
-                )
+                # idx = torch.argmax(self.hparams, dim=-1)
+                # idx = idx.view(seg.shape[0], seg.shape[1], 1)
+                # seg_mask = torch.gather(seg, -1, idx)
+                # render_dict = helper.volumetric_rendering_seg_mask(
+                #     rgb,
+                #     density,
+                #     t_vals,
+                #     rays['rays_d'],
+                #     white_bkgd=white_bkgd,
+                #     seg_mask=seg_mask,
+                #     seg=seg
+                # )
 
             # save for sample_pdf function for fine mlp
             # weights = render_dict['weights']
@@ -845,6 +825,140 @@ class NeRFSeg(nn.Module):
 
         return ret
 
+class NeRFEllipsoid(nn.Module):
+    def __init__(self, 
+        hparams: dict,
+        num_levels: int = 2,
+        min_deg_point: int = 0,
+        max_deg_point: int = 10,
+        deg_view: int = 4,
+        num_coarse_samples: int = 64,
+        num_fine_samples: int = 128,
+        use_viewdirs: bool = True,
+        noise_std: float = 0.0,
+        lindisp: bool = False,) -> None:
+        
+        for name, value in vars().items():
+                if name not in ["self", "__class__"]:
+                    setattr(self, name, value)
+
+        super().__init__()
+        self.hparams = hparams
+        self.rgb_activation = nn.Sigmoid() 
+        self.sigma_activation = nn.ReLU()
+        if hparams.use_part_condition:
+            self.seg_activation = self.sigma_activation
+        else:
+            self.seg_activation = nn.Softmax(dim=-1)
+        self.coarse_mlp = NeRFMLPSeg(min_deg_point, max_deg_point, \
+                                    deg_view, hparams)
+        self.fine_mlp = NeRFMLPSeg(min_deg_point, max_deg_point, \
+                                    deg_view, hparams)
+        if self.hparams.one_hot_activation:
+            self.one_hot_activation = OneHotActivation
+        else:
+            self.one_hot_activation = None
+            
+        for i in range(self.hparams.num_part):
+            att_name = 'e_%d'%i
+            setattr(self, att_name, Ellipsoid())
+            
+            
+    def forward_static(self, rays, randomized, white_bkgd, near, far, seg_feat=False):
+        '''
+        collect rays for different part and do composite rendering
+        rays: list of dicts 
+        '''
+        ret = {}
+        for i_level in range(self.num_levels):
+            if i_level == 0:
+                t_vals, samples = helper.sample_along_rays(
+                    rays_o=rays["rays_o"],
+                    rays_d=rays["rays_d"],
+                    num_samples=self.num_coarse_samples,
+                    near=near,
+                    far=far,
+                    randomized=randomized,
+                    lindisp=self.lindisp,
+                )
+                mlp = self.coarse_mlp
+                output_feat = False
+
+            else:
+                t_mids = 0.5 * (t_vals[..., 1:] + t_vals[..., :-1])
+                t_vals, samples = helper.sample_pdf(
+                    bins=t_mids,
+                    weights=ret['level_0']['weights'][..., 1:-1],
+                    origins=rays["rays_o"],
+                    directions=rays["rays_d"],
+                    t_vals=t_vals,
+                    num_samples=self.num_fine_samples,
+                    randomized=randomized,
+                )
+                mlp = self.fine_mlp
+                if seg_feat:
+                    output_feat = True
+
+            samples_enc = helper.pos_enc(
+                samples,
+                self.min_deg_point,
+                self.max_deg_point,
+            )
+            viewdirs_enc = helper.pos_enc(rays["viewdirs"], 0, self.deg_view)
+            if self.hparams.use_part_condition:
+                forward_dict = {
+                    "x":samples_enc,
+                    "condition":viewdirs_enc,
+                    "pos_raw":samples
+                }
+                
+            else:
+                forward_dict = {
+                    "x":samples_enc,
+                    "condition":viewdirs_enc,
+                    "pos_raw":samples
+                }
+
+            mlp_ret_dict = mlp(**forward_dict)
+            raw_rgb = mlp_ret_dict['raw_rgb']
+            raw_density = mlp_ret_dict['raw_density']
+            
+
+            if self.noise_std > 0 and randomized:
+                raw_density = raw_density + torch.rand_like(raw_density) * self.noise_std
+
+            rgb = self.rgb_activation(raw_rgb)
+            density = self.sigma_activation(raw_density)
+            
+            raw_seg = mlp_ret_dict['raw_seg']
+            seg = self.seg_activation(raw_seg)
+            if self.one_hot_activation is not None:
+                seg = self.one_hot_activation(seg)
+
+            
+            result = {
+                "rgb": rgb,
+                "density": density,
+                "seg": seg
+            }
+            ret['level_' + str(i_level)] = result
+
+        return ret
+        # for i in range(self.hparam.num_part):
+        #     att_name = 'e_%d'%i
+        #     cur_ellipsoid = getattr(self, att_name)
+            
+        #     for k, v in rays.items():
+        #         pass
+        #     pass
+        
+        # pass
+    
+    def forward_dynamic(self, rays):
+        '''
+        '''
+        
+        pass
 
 class LitNeRFSeg_v2(LitModel):
     def __init__(
@@ -1643,23 +1757,31 @@ class LitNeRFSegArt(LitModel):
         self.part_num = self.hparams.part_num
         self.lr_final = self.hparams.lr_final
         self.art_list = []
-        art_args_dict = {
-            'hparam': self.hparams,
-            'mode': 'qua', 
-            'init_mode': self.hparams.init_mode,
-            'hypothesis_radius': self.hparams.hypothesis_radius,
-            'hypo_samples': self.hparams.hypothesis_samples,
-            'radius_factor': self.hparams.hypothesis_radius_scaling
-        }
+        
         self.table_q_list = []
         self.table_t_list = []
-        for _ in range(self.part_num - 1):
-            self.art_list += [ArticulationEstimation(**art_args_dict)]
-            
-            # self.Q_err_table = wandb.Table(columns=['qw', 'qx', 'qy', 'qz'])
-            # self.T_err_table = wandb.Table(columns=['x', 'y', 'z'])
-            self.table_q_list += [wandb.Table(columns=['qw', 'qx', 'qy', 'qz'])]
-            self.table_t_list += [wandb.Table(columns=['x', 'y', 'z'])]
+        
+        if self.hparams.use_art_mlp:
+            for i in range(self.part_num - 1):
+                att_name = 'art_mlp_%d'%i
+                setattr(self, att_name, ArticulationMLP(self.hparams, 2))
+                self.art_list += [getattr(self, att_name)]
+        else:
+            art_args_dict = {
+                'hparam': self.hparams,
+                'mode': 'qua', 
+                'init_mode': self.hparams.init_mode,
+                'hypothesis_radius': self.hparams.hypothesis_radius,
+                'hypo_samples': self.hparams.hypothesis_samples,
+                'radius_factor': self.hparams.hypothesis_radius_scaling
+            }
+            for _ in range(self.part_num - 1):
+                self.art_list += [ArticulationEstimation(**art_args_dict)]
+                
+                # self.Q_err_table = wandb.Table(columns=['qw', 'qx', 'qy', 'qz'])
+                # self.T_err_table = wandb.Table(columns=['x', 'y', 'z'])
+                self.table_q_list += [wandb.Table(columns=['qw', 'qx', 'qy', 'qz'])]
+                self.table_t_list += [wandb.Table(columns=['x', 'y', 'z'])]
         
         if self.hparams.one_hot_loss:
             self.one_hot_loss = OneHotLoss()
@@ -1806,9 +1928,11 @@ class LitNeRFSegArt(LitModel):
             #         elif pg['name'] == 'seg':
             #             pg['lr'] = 0
 
-        lr_q_decay = (0.8 ** ((local_steps - self.skip_step) / 200))
+        lr_q_decay =  (0.8 ** ((local_steps - self.skip_step) / 200))
+        # lr_t_decay = (0.8 ** ((local_steps - self.skip_step) / 500))
+        lr_t_decay = 1
         new_lr_Q = self.hparams.lr_art_Q * lr_q_decay
-
+        new_lr_T = self.hparams.lr_art_T * lr_t_decay
         if self.opt_seg:
             for pg in optimizer.param_groups:
                 if 'art' in pg['name']:
@@ -1826,7 +1950,7 @@ class LitNeRFSegArt(LitModel):
         if not self.opt_seg:
             for pg in optimizer.param_groups:
                 if pg['name'] == 'art_T':
-                    pg['lr'] = self.hparams.lr_art_T 
+                    pg['lr'] = max(new_lr_T, 1e-3)
                 elif pg['name'] == 'art_Q':
                     pg['lr'] = max(new_lr_Q, 5e-4)
                 elif pg['name'] == 'seg':
@@ -1843,17 +1967,7 @@ class LitNeRFSegArt(LitModel):
                 seg_params += [param]
 
         art_params = []
-        art_params_Q = []
-        art_params_T = []
-        for art_est in self.art_list:
-            if art_est is not None:
-                for _, param in art_est.named_parameters():
-                    # param.requires_grad = True
-                    if len(param) == 4:
-                        art_params_Q += [param]
-                    else:
-                        art_params_T += [param]
-                    # art_params += [param]
+        
         seg_opt_dict = {
             'params': seg_params,
             'lr': self.lr_init,
@@ -1866,52 +1980,46 @@ class LitNeRFSegArt(LitModel):
             
 
         opt_params = [seg_opt_dict]
-
-        art_params_Q = []
-        art_params_T = []
-        for art_est in self.art_list:
-            if art_est is not None:
-                for _, param in art_est.named_parameters():
-                    # param.requires_grad = True
-                    if len(param) == 4:
-                        art_params_Q += [param]
-                    else:
-                        art_params_T += [param]
-        
-        if not self.hparams.freeze_Q:
-        
-            art_opt_Q_dict = {
-                'params': art_params_Q,
-                'lr': self.hparams.lr_art_Q,
-                'name': 'art_Q'
+        if self.hparams.use_art_mlp:
+            art_params = []
+            for mlp in self.art_list:
+                for _, p in mlp.named_parameters():
+                    art_params += [p]
+            art_param_dict = {
+                'params': art_params,
+                'lr': self.lr_init,
+                'name': 'art'
             }
-            opt_params += [art_opt_Q_dict]
-            # optimizer.add_param_group(art_opt_Q_dict)
+            opt_params += [art_param_dict]
+        else:
+            art_params_Q = []
+            art_params_T = []
+            for art_est in self.art_list:
+                if art_est is not None:
+                    for _, param in art_est.named_parameters():
+                        # param.requires_grad = True
+                        if len(param) == 4:
+                            art_params_Q += [param]
+                        else:
+                            art_params_T += [param]
             
-        if not self.hparams.freeze_T:
-            art_opt_T_dict = {
-                'params': art_params_T,
-                'lr': self.hparams.lr_art_T,
-                'name': 'art_T'
-            }
-            opt_params += [art_opt_T_dict]
-            # optimizer.add_param_group(art_opt_T_dict)
-        # if not self.hparams.freeze_Q:
+            if not self.hparams.freeze_Q:
             
-        #     art_opt_Q_dict = {
-        #         'params': art_params_Q,
-        #         'lr': lr_Q,
-        #         'name': 'art_Q'
-        #     }
-        #     opt_params += [art_opt_Q_dict]
-            
-        # if not self.hparams.freeze_T:
-        #     art_opt_T_dict = {
-        #         'params': art_params_T,
-        #         'lr': self.lr_art,
-        #         'name': 'art_T'
-        #     }
-        #     opt_params += [art_opt_T_dict]
+                art_opt_Q_dict = {
+                    'params': art_params_Q,
+                    'lr': self.hparams.lr_art_Q,
+                    'name': 'art_Q'
+                }
+                opt_params += [art_opt_Q_dict]
+                # optimizer.add_param_group(art_opt_Q_dict)
+                
+            if not self.hparams.freeze_T:
+                art_opt_T_dict = {
+                    'params': art_params_T,
+                    'lr': self.hparams.lr_art_T,
+                    'name': 'art_T'
+                }
+                opt_params += [art_opt_T_dict]
         
         return torch.optim.Adam(
             params=opt_params, lr=self.lr_init, betas=(0.9, 0.999)
@@ -1939,26 +2047,29 @@ class LitNeRFSegArt(LitModel):
             # dirs = batch['dirs'].repeat(self.part_num, 1)
             new_c2w_list = []
             part_code_list = []
-            for i in range(self.part_num):
-                # one_hot = F.one_hot(torch.Tensor(i+1).long(), self.part_num).reshape([1, -1]).repeat(ray_num, 1).to(c2w)
-                one_hot = self.get_part_code(ray_num, i)
-                one_hot = one_hot.to(c2w)
-                part_code_list += [one_hot]
-                if i == 0:
-                    new_c2w_list += [c2w]
-                else:
-                    new_c2w = self.art_list[i-1](c2w)
-                    new_c2w_list += [new_c2w]
+            if self.hparams.use_art_mlp:
+                loss_dict = self.get_training_loss(batch, input_dict)
+            else:
+                for i in range(self.part_num):
+                    # one_hot = F.one_hot(torch.Tensor(i+1).long(), self.part_num).reshape([1, -1]).repeat(ray_num, 1).to(c2w)
+                    one_hot = self.get_part_code(ray_num, i)
+                    one_hot = one_hot.to(c2w)
+                    part_code_list += [one_hot]
+                    if i == 0:
+                        new_c2w_list += [c2w]
+                    else:
+                        new_c2w = self.art_list[i-1](c2w)
+                        new_c2w_list += [new_c2w]
 
-            part_code = torch.cat(part_code_list, dim=0)
+                part_code = torch.cat(part_code_list, dim=0)
 
-            input_dict = {
-                'part_code': part_code,
-                'c2w': torch.cat(new_c2w_list, dim=0),
-                'dirs': batch['dirs'].repeat(self.part_num, 1)
-            }
-            # forward
-            loss_dict = self.get_training_loss(batch, input_dict)
+                input_dict = {
+                    'part_code': part_code,
+                    'c2w': torch.cat(new_c2w_list, dim=0),
+                    'dirs': batch['dirs'].repeat(self.part_num, 1)
+                }
+                # forward
+                loss_dict = self.get_training_loss(batch, input_dict)
         return loss_dict
 
     def hypothesis_testing(self, batch):
@@ -2270,29 +2381,29 @@ class LitNeRFSegArt(LitModel):
         self.log("train/loss", loss, on_step=True)
 
         
-            
-        for i in range(len(self.art_list)):
-            key_Q = 'train/Q_err_%d'%i
-            key_T = 'train/T_err_%d'%i
-            q_table = self.table_q_list[i]
-            t_table = self.table_t_list[i]
-            q_new_err = F.normalize(self.art_list[i].Q, p=2, dim=0) - self.art_list[i].perfect_Q
-            t_new_err = self.art_list[i].axis_origin - self.art_list[i].perfect_axis_origin
-            q_err = q_new_err.abs().sum().detach().cpu() 
-            t_err = t_new_err.abs().sum().detach().cpu()
-            q_new_err = q_new_err.detach().cpu().numpy().tolist()
-            t_new_err = t_new_err.detach().cpu().numpy().tolist()
-            
-            # self.log(log_dict)
-            
-            self.log('train/Q_err_sum_%d'%i, q_err, logger=True)
-            self.log('train/T_err_sum_%d'%i, t_err, logger=True)
+        if not self.hparams.use_art_mlp:
+            for i in range(len(self.art_list)):
+                key_Q = 'train/Q_err_%d'%i
+                key_T = 'train/T_err_%d'%i
+                q_table = self.table_q_list[i]
+                t_table = self.table_t_list[i]
+                q_new_err = F.normalize(self.art_list[i].Q, p=2, dim=0) - self.art_list[i].perfect_Q
+                t_new_err = self.art_list[i].axis_origin - self.art_list[i].perfect_axis_origin
+                q_err = q_new_err.abs().sum().detach().cpu() 
+                t_err = t_new_err.abs().sum().detach().cpu()
+                q_new_err = q_new_err.detach().cpu().numpy().tolist()
+                t_new_err = t_new_err.detach().cpu().numpy().tolist()
+                
+                # self.log(log_dict)
+                
+                self.log('train/Q_err_sum_%d'%i, q_err, logger=True)
+                self.log('train/T_err_sum_%d'%i, t_err, logger=True)
         
-        if (self.global_step % 20) == 0:
-            q_table.add_data(*q_new_err)
-            t_table.add_data(*t_new_err)
-            self.logger.log_table(key=key_Q, columns=q_table.columns, data=q_table.data)
-            self.logger.log_table(key=key_T, columns=t_table.columns, data=t_table.data)
+            if (self.global_step % 20) == 0:
+                q_table.add_data(*q_new_err)
+                t_table.add_data(*t_new_err)
+                self.logger.log_table(key=key_Q, columns=q_table.columns, data=q_table.data)
+                self.logger.log_table(key=key_T, columns=t_table.columns, data=t_table.data)
         return loss
     
     def training_step(self, batch, batch_idx):
@@ -2332,44 +2443,58 @@ class LitNeRFSegArt(LitModel):
                 'c2w': batch['c2w'],
                 'dirs': batch['dirs']
             }
+            # if self.hparams.use_art_mlp:
+            #     c2w = batch['c2w'].to(torch.float32)
+            #     rays_o, viewdirs, rays_d = get_rays_torch_multiple_c2w(batch['dirs'], c2w[:, :3, :], output_view_dirs=True)
+            #     rays = {
+            #         'rays_o': rays_o,
+            #         'rays_d': rays_d,
+            #         'viewdirs': viewdirs
+            #     }
+            #     # gather_dict = self.apply_art_mlp(rays)
+            #     rendered_results = self.forward(rays, self.randomized, self.white_bkgd, self.near, self.far)
+            # else:
             rendered_results = self.model.forward_c2w(
                 input_dict, self.randomized, self.white_bkgd, self.near, self.far, warm_up=True
-            )
+            )   
             loss = self.get_warmup_loss(batch, rendered_results)
             self.log('train/warm_up_loss', loss, on_step=True)
         else:
-            new_c2w_list = []
-            part_code_list = []
-            for i in range(self.part_num):
-                one_hot = self.get_part_code(ray_num, i)
-                one_hot = one_hot.to(c2w)
-                part_code_list += [one_hot]
-                if i == 0:
-                    new_c2w_list += [c2w]
-                else:
-                    new_c2w = self.art_list[i-1](c2w)
-                    new_c2w_list += [new_c2w]
+            if self.hparams.use_art_mlp:
+                c2w = batch['c2w'].to(torch.float32)
+                rays_o, viewdirs, rays_d = get_rays_torch_multiple_c2w(batch['dirs'], c2w[:, :3, :], output_view_dirs=True)
+                rays = {
+                    'rays_o': rays_o,
+                    'rays_d': rays_d,
+                    'viewdirs': viewdirs
+                }
+                # gather_dict = self.apply_art_mlp(rays)
+                gather_dict = self.apply_art_mlp(rays)
+                rendered_results = self.model.forward(gather_dict, self.randomized, self.white_bkgd, self.near, self.far)
+            else:
+                new_c2w_list = []
+                part_code_list = []
+                for i in range(self.part_num):
+                    one_hot = self.get_part_code(ray_num, i)
+                    one_hot = one_hot.to(c2w)
+                    part_code_list += [one_hot]
+                    if i == 0:
+                        new_c2w_list += [c2w]
+                    else:
+                        new_c2w = self.art_list[i-1](c2w)
+                        new_c2w_list += [new_c2w]
 
-                    # log art est to check optimization
-                    # art_est = self.art_list[i-1]
-                    # gt_Q = art_est.perfect_Q
-                    # gt_axis = art_est.perfect_axis_origin
-                    # self.log('train/art_gt_Q_' + str(i), gt_Q, on_step=True)
-                    # self.log('train/art_gt_T_' + str(i), gt_axis, on_step=True)
-                    # self.log('train/art_est_Q_' + str(i), art_est.Q, on_step=True)
-                    # self.log('train/art_est_T_' + str(i), art_est.axis_origin, on_step=True)
+                # part_code = torch.cat(part_code_list, dim=0)
 
-            part_code = torch.cat(part_code_list, dim=0)
-
-            input_dict = {
-                'part_code': part_code,
-                'c2w': torch.cat(new_c2w_list, dim=0),
-                'dirs': batch['dirs'].repeat(self.part_num, 1)
-            }
-            
-            rendered_results = self.model.forward_c2w(
-                input_dict, self.randomized, self.white_bkgd, self.near, self.far
-            )
+                input_dict = {
+                    # 'part_code': part_code,
+                    'c2w': torch.cat(new_c2w_list, dim=0),
+                    'dirs': batch['dirs'].repeat(self.part_num, 1)
+                }
+                
+                rendered_results = self.model.forward_c2w(
+                    input_dict, self.randomized, self.white_bkgd, self.near, self.far
+                )
             loss = self.get_training_loss(batch, rendered_results)
 
         opts = self.optimizers()
@@ -2383,16 +2508,17 @@ class LitNeRFSegArt(LitModel):
                 art_lr_T = pg['lr']
 
         self.log('train/seg_lr', seg_lr, on_step=True, prog_bar=False, logger=True)
-        if not self.hparams.freeze_Q:
-            try:
-                self.log('train/art_lr_Q', art_lr_Q, on_step=True, prog_bar=True, logger=True)
-            except:
-                pass
-        if not self.hparams.freeze_T:
-            try:
-                self.log('train/art_lr_T', art_lr_T, on_step=True, prog_bar=True, logger=True)
-            except:
-                pass
+        if not self.hparams.use_art_mlp:
+            if not self.hparams.freeze_Q:
+                try:
+                    self.log('train/art_lr_Q', art_lr_Q, on_step=True, prog_bar=True, logger=True)
+                except:
+                    pass
+            if not self.hparams.freeze_T:
+                try:
+                    self.log('train/art_lr_T', art_lr_T, on_step=True, prog_bar=True, logger=True)
+                except:
+                    pass
         return loss
 
     def training_epoch_end(self, outputs: EPOCH_OUTPUT) -> None:
@@ -2456,8 +2582,8 @@ class LitNeRFSegArt(LitModel):
             minibatch_data = {
                 "rays_o": input_dict["rays_o"][start_idx:end_idx],
                 "rays_d": input_dict["rays_d"][start_idx:end_idx],
-                "viewdirs": input_dict["viewdirs"][start_idx:end_idx],
-                "part_code": input_dict["part_code"][start_idx:end_idx]
+                "viewdirs": input_dict["viewdirs"][start_idx:end_idx]
+                # "part_code": input_dict["part_code"][start_idx:end_idx]
             }
 
             # Call the forward function with the minibatch data
@@ -2504,8 +2630,64 @@ class LitNeRFSegArt(LitModel):
             minibatch_data = {
                 "rays_o": [input_dict["rays_o"][start_idx:end_idx] for input_dict in list_dict],
                 "rays_d": [input_dict["rays_d"][start_idx:end_idx] for input_dict in list_dict],
-                "viewdirs": [input_dict["viewdirs"][start_idx:end_idx] for input_dict in list_dict],
-                "part_code": [input_dict["part_code"][start_idx:end_idx] for input_dict in list_dict]
+                "viewdirs": [input_dict["viewdirs"][start_idx:end_idx] for input_dict in list_dict]
+                # "part_code": [input_dict["part_code"][start_idx:end_idx] for input_dict in list_dict]
+            }
+            for k, v in minibatch_data.items():
+                minibatch_data[k] = torch.cat(v, dim=0)
+            minibatch_result = self.model.forward(minibatch_data, False, self.white_bkgd, self.near, self.far)
+            rgb_results.append(minibatch_result["level_1"]["rgb"])
+            
+            opacity_results.append(minibatch_result['level_1']['opacity'])
+            depth_results.append(minibatch_result['level_1']['depth'])
+            seg_results.append(minibatch_result['level_1']['comp_seg'])
+
+        final_rgb = torch.cat(rgb_results, dim=0)
+        final_opacity = torch.cat(opacity_results, dim=0)
+        final_depth = torch.cat(depth_results, dim=0)
+        final_seg = torch.cat(seg_results, dim=0)
+        ret_dict = {
+            'rgb': final_rgb,
+            'opacity': final_opacity,
+            'depth': final_depth,
+            'comp_seg': final_seg
+        }
+        return ret_dict
+    
+    def apply_art_mlp(self, input_dict):
+        if not self.hparams.use_art_mlp:
+            raise RuntimeError('this function should not be called when use_art_mlp is False!')
+        transform_dict = {}
+        for k in input_dict.keys():
+            transform_dict[k] = [input_dict[k]]
+        for art_mlp in self.art_list:
+            for k, v in input_dict.items():
+                transform_dict[k] += [art_mlp(v)]
+        
+        for k, v in transform_dict.items():
+            transform_dict[k] = torch.cat(v, dim=0)
+        
+        return transform_dict
+    
+    def split_forward_composite_mlp(self, list_dict):
+        '''
+        list of input dicts
+        '''
+        chunk_size = self.hparams.forward_chunk 
+        N = list_dict[0]['rays_o'].shape[0]
+        rgb_results = []
+        opacity_results = []
+        depth_results = []
+        seg_results = []
+        for i in range(0, N, chunk_size):
+            # Get a minibatch of data
+            start_idx = i
+            end_idx = min(i + chunk_size, N)
+            minibatch_data = {
+                "rays_o": [input_dict["rays_o"][start_idx:end_idx] for input_dict in list_dict],
+                "rays_d": [input_dict["rays_d"][start_idx:end_idx] for input_dict in list_dict],
+                "viewdirs": [input_dict["viewdirs"][start_idx:end_idx] for input_dict in list_dict]#,
+                # "part_code": [input_dict["part_code"][start_idx:end_idx] for input_dict in list_dict]
             }
             for k, v in minibatch_data.items():
                 minibatch_data[k] = torch.cat(v, dim=0)
@@ -2533,27 +2715,45 @@ class LitNeRFSegArt(LitModel):
         ray_num = c2w.shape[0]
         part_img_list = []
         img_list = []
-        opacity_list = []
+        opacity_list = [] 
         depth_list = []
+        local_step = self.global_step - self.hparams.warm_up_steps
         if self.hparams.composite_rendering:
-            input_dict_list = []
-            for part in range(self.part_num):
-                part_code = self.get_part_code(ray_num, part)
-                part_code = part_code.to(c2w)
-
-                if part == 0:
-                    c2w_part = c2w
-                else:
-                    c2w_part = self.art_list[part-1](c2w)
-                
-                rays_o, viewdirs, rays_d = get_rays_torch_multiple_c2w(batch['dirs'], c2w_part[:, :3, :], output_view_dirs=True)
+            if self.hparams.use_art_mlp:
+                rays_o, viewdirs, rays_d = get_rays_torch_multiple_c2w(batch['dirs'], c2w[:, :3, :], output_view_dirs=True)
                 input_dict = {
-                    'rays_o': rays_o,
-                    'rays_d': rays_d,
-                    'viewdirs': viewdirs,
-                    'part_code': part_code
-                }
-                input_dict_list += [input_dict]
+                        'rays_o': rays_o,
+                        'rays_d': rays_d,
+                        'viewdirs': viewdirs
+                    }
+                input_dict_list = [input_dict]
+                for part in range(self.part_num - 1):
+                    part_dict = {}
+                    for k, v in input_dict.items():
+                        if 'part' in k:
+                            part_dict[k] = input_dict[k]
+                        else:
+                            part_dict[k] = self.art_list[part](v)
+                    input_dict_list += [part_dict]
+            else:
+                input_dict_list = []
+                for part in range(self.part_num):
+                    part_code = self.get_part_code(ray_num, part)
+                    part_code = part_code.to(c2w)
+
+                    if part == 0:
+                        c2w_part = c2w
+                    else:
+                        c2w_part = self.art_list[part-1](c2w)
+                    
+                    rays_o, viewdirs, rays_d = get_rays_torch_multiple_c2w(batch['dirs'], c2w_part[:, :3, :], output_view_dirs=True)
+                    input_dict = {
+                        'rays_o': rays_o,
+                        'rays_d': rays_d,
+                        'viewdirs': viewdirs,
+                        'part_code': part_code
+                    }
+                    input_dict_list += [input_dict]
 
             render_dict = self.split_forward_composite(input_dict_list)
             ret_dict = render_dict
@@ -2802,7 +3002,7 @@ class LitNeRFSegArt(LitModel):
         forward_dict = {
             # 'x': samples_enc,
             # 'condition': view_enc,
-            'part_code': None,
+            # 'part_code': None,
             'pos_raw': samples
         }
 
@@ -2827,7 +3027,7 @@ class LitNeRFSegArt(LitModel):
             minibatch_data = {
                 "x": split_x.unsqueeze(1),
                 "condition": split_view,
-                "part_code": None,
+                # "part_code": None,
                 "pos_raw": split_samples.unsqueeze(1)
             }
             coarse_result = coarse_mlp(**minibatch_data)

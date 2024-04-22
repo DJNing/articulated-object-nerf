@@ -270,7 +270,7 @@ def get_parser():
     parser.add_argument('--grid_res', type=int, default=128, help="whether to pass sanity check")
     parser.add_argument('--grid_nlvl', type=int, default=1, help="whether to pass sanity check")
     parser.add_argument('--aabb', type=float, nargs="+", default=[-1, -1, -1, 1, 1, 1], help="bbox size for the object")
-    
+    parser.add_argument('--use_art_mlp', type=bool, default=False, help="whether to pass sanity check")
     return parser
 
 def get_opts():

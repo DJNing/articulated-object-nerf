@@ -17,3 +17,4 @@ wandb
 full_sapien
 pairs_data
 *.ipynb
+*.png

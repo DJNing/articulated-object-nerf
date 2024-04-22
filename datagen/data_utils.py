@@ -58,6 +58,23 @@ def calculate_pose_openGL(translation):
     mat44[:3, 3] = trans_gl
     return mat44
 
+# def calculate_pose_openGL_reverse(mat44):
+#     """
+#     recalculate the rotation matrix for camera extrinsic, camera is facing the origin
+#     input
+#         @param translation: object position given in viwer coordinate, row vector
+        
+#     """
+#     trans_gl = np.dot(conversion_matrix, translation.T) # permute
+#     forward = -trans_gl / np.linalg.norm(trans_gl)
+#     right = np.cross([0, 1, 0], forward)
+#     right = right / np.linalg.norm(right)
+#     up = np.cross(forward, right)
+#     mat44 = np.eye(4)
+#     mat44[:3, :3] = np.stack([right, up, forward], axis=1)
+#     mat44[:3, 3] = trans_gl
+#     return mat44
+
 def custom_openGL(camera):
     model_mat = camera.pose.to_transformation_matrix()
     model_trans = model_mat[:3, -1:]
@@ -675,6 +692,183 @@ def scene_setup(urdf_file, h=480, w=640, n=0.1, f=100):
         far=far,
     )
     return camera, asset, scene
+    
+    
+def gen_articulated_object_paris(num_pos_img, radius_, split, camera, asset, scene, object_path, \
+                                   camera_mount_actor=None, theta_range = [0*math.pi, 2*math.pi], \
+                                    phi_range = [0*math.pi, 1*math.pi], state='start'):
+    
+    with_seg=True
+    
+    state_path = object_path / state
+    state_path.mkdir(exist_ok=True)
+    
+    save_base_path = state_path / split
+        
+    save_base_path.mkdir(exist_ok=True)
+    save_rgb_path = save_base_path 
+    
+    
+    save_depth_path = save_base_path / 'depth'
+    save_depth_path.mkdir(exist_ok=True)
+    
+    if with_seg:
+        save_seg_path = save_base_path / 'seg'
+        save_seg_path.mkdir(exist_ok=True)
+    else:
+        save_seg_path = None
+    render_pose_dict = {}
+    
+    camera_K = camera.get_intrinsic_matrix()
+    
+    frame_dict = {
+        'K': camera_K.tolist()
+    }
+    max_d = 0
+    min_d = np.inf
+    for i in tqdm(range(num_pos_img)):
+        instance_save_path = None
+        point = random_point_in_sphere(radius=radius_, theta_range=theta_range, phi_range=phi_range)
+        # point = points[i]
+        ret_dict = render_img(point, instance_save_path, camera_mount_actor, scene, camera, asset, pose_fn=custom_openGL, save=False)
+        frame_id = str(i).zfill(4)
+        c2w = camera.get_model_matrix()
+        frame_dict[frame_id] = c2w.tolist()
+        
+        render_pose = ret_dict['mat44']
+        render_pose_dict[frame_id] = render_pose.tolist()
+        
+        rgb_fname = save_rgb_path / (frame_id + '.png')
+        rgba_pil = ret_dict['rgba']
+        rgba_pil.save(str(rgb_fname))   
+        
+        depth_fname = save_depth_path / ('depth' + str(i) + '.png')
+        depth_pil = ret_dict['depth']
+        depth_pil.save(str(depth_fname))
+
+        if with_seg:
+            fname = frame_id + '.png'
+            ret_dict['label_actor'].save(str(save_seg_path / fname))
+        
+        if ret_dict['max_d'] > max_d:
+            max_d = ret_dict['max_d'] 
+        if ret_dict['min_d'] < min_d:
+            min_d = ret_dict['min_d']
+    print('min_d = ', min_d)
+    print('max_d = ', max_d)
+
+    transform_json = frame_dict
+
+    transform_fname = str(state_path / ('camera_' + split + '.json'))
+    with open(transform_fname, 'w') as f:
+        json.dump(transform_json, f)
+    pass
+
+def gen_paris_art(object_name, object_id, op_path, motion, camera, scene, asset, radius, json_fname, joint_idx, motion_idx, motion_type='r', only_motion_json=False):
+    img_output_path = P(op_path) / 'load' / 'sapien' / object_name / object_id
+    img_output_path.mkdir(exist_ok=True, parents=True)
+    
+    
+    train_args_dict = {
+        "num_pos_img": 100,
+        "radius_": radius,
+        "split": "train",
+        "camera": camera,
+        "asset": asset,
+        "scene": scene,
+        "object_path": img_output_path,
+        "phi_range": [0.1*math.pi, 0.55*math.pi]
+    }
+    val_args_dict = {
+        "num_pos_img": 20,
+        "radius_": radius,
+        "split": "val",
+        "camera": camera,
+        "asset": asset,
+        "scene": scene,
+        "object_path": img_output_path,
+        "phi_range": [0.1*math.pi, 0.55*math.pi]
+    }
+    test_args_dict = {
+        "num_pos_img": 50,
+        "radius_": radius,
+        "split": "test",
+        "camera": camera,
+        "asset": asset,
+        "scene": scene,
+        "object_path": img_output_path,
+        "phi_range": [0.1*math.pi, 0.55*math.pi]
+    }
+    if not only_motion_json:
+        if motion_type == 'r':
+            asset.set_qpos(motion[0]/180*np.pi)
+        else:
+            asset.set_qpos(motion[0])
+        gen_articulated_object_paris(**train_args_dict, state='start')
+        gen_articulated_object_paris(**test_args_dict, state='start')
+        gen_articulated_object_paris(**val_args_dict, state='start')
+        start_qpos = asset.get_qpos()
+        print(start_qpos)
+        if motion_type == 'r':
+            
+            asset.set_qpos(motion[1]/180*np.pi)
+        else:
+            asset.set_qpos(motion[1])
+        gen_articulated_object_paris(**train_args_dict, state='end')
+        gen_articulated_object_paris(**test_args_dict, state='end')
+        gen_articulated_object_paris(**val_args_dict, state='end')
+        end_qpos = asset.get_qpos()
+        print(end_qpos)
+    with open(str(json_fname), 'r') as f:
+        obj_meta = json.load(f)
+        
+    joint_info_list = []
+    for idx, m_idx in enumerate(joint_idx):
+        m_dict = obj_meta[m_idx]
+        if "axis" in m_dict['jointData'].keys():
+            cur_dict = {}
+            if m_dict['joint'] == 'hinge':
+                motion_type = 'revolute'
+            else:
+                motion_type = 'prismatic'
+            
+            R_coord = np.array([[1., 0., 0.], [0., 0., -1.], [0., 1., 0.]])
+            json_o = np.array(m_dict['jointData']['axis']['origin'])
+            json_d = np.array(m_dict['jointData']['axis']['direction'])
+            axis_o = np.matmul(R_coord, json_o).tolist()
+            # if motion_type == 'revolute':
+            axis_d = np.matmul(R_coord, json_d).tolist()
+            # else:
+            #     axis_d = json_d.tolist()
+            cur_dict['trans_info'] = {
+                "axis":{
+                    "o": axis_o,
+                    "d": axis_d
+                },
+                "limit":{
+                    "a": m_dict['jointData']['limit']['a'],
+                    "b": m_dict['jointData']['limit']['b']
+                },
+                "rotate":{
+                    "l": float(motion[0][motion_idx[idx]]),
+                    "r": float(motion[1][motion_idx[idx]])
+                },
+                "translate":{
+                    "l": float(motion[0][motion_idx[idx]]),
+                    "r": float(motion[1][motion_idx[idx]])
+                },
+                "motion_type": motion_type
+            }
+            joint_info_list += [cur_dict]
+    
+    
+    # data_paris_path = P("data/load/glasses/102612/textured_objs")
+    data_paris_path = P(op_path) / 'data' / 'sapien' / object_name / object_id / 'textured_objs'
+    data_paris_path.mkdir(exist_ok=True, parents=True)
+    save_json_name = data_paris_path / 'trans.json'
+    with open(str(save_json_name), 'w') as f:
+        json.dump(joint_info_list, f)
+    pass
     
 if __name__ == '__main__':
     # test articulation image generation

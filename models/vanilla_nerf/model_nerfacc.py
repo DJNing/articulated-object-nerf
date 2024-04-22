@@ -152,6 +152,10 @@ class LitNeRFAcc(LitModel):
             params=self.radience_field.parameters(), lr=self.lr_init, betas=(0.9, 0.999)
             )
     
+    def forward_all_samples(self, batch):
+        
+        pass
+    
     def forward(self, batch):
         rays_o = batch['rays_o']
         rays_d = batch['rays_d']
